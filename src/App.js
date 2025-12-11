@@ -8,6 +8,7 @@ function PopulationSimulation() {
   const [tickCount, setTickCount] = useState(0);
   const [history, setHistory] = useState([]);
   const [isRunning, setIsRunning] = useState(false);
+  const [showMenu, setShowMenu] = useState(false);
   
   // Parameter variables (user adjusts these)
   const [birthRate, setBirthRate] = useState(0.12);
@@ -94,6 +95,22 @@ function PopulationSimulation() {
         <p><strong>Available Resources:</strong> {Math.round(availableResources)}</p>
       </div>
       <div style={{ marginBottom: '20px' }}>
+
+        <button 
+          onClick={() => setShowMenu(!showMenu)}
+          style={{ 
+            padding: '10px 15px',
+            marginRight: '10px',
+            fontSize: '16px',
+            cursor: 'pointer',
+            background: 'none',
+            border: '1px solid #ccc',
+            borderRadius: '5px'
+          }}
+        >
+          ☰
+        </button>
+
         <button 
           onClick={runSimulationTick}
           style={{ 
@@ -136,6 +153,103 @@ function PopulationSimulation() {
         >
           Reset Simulation
         </button>
+      </div>
+      <div>
+        {showMenu && (
+  <div style={{ 
+    padding: '20px', 
+    backgroundColor: '#f9f9f9', 
+    borderRadius: '5px',
+    marginBottom: '20px'
+  }}>
+    <h3>Sliders</h3>
+    
+    <div>
+      <label>
+        Birth Rate: {birthRate} ({(birthRate * 100).toFixed(1)}%)
+        <input 
+          type="range"
+          min={0.01}
+          max={0.5}
+          step={0.005}
+          value={birthRate}
+          onChange={(e) => setBirthRate(parseFloat(e.target.value))}
+        />
+      </label>
+    </div>
+
+    <div>
+      <label>
+        Death Rate: {deathRate} ({(deathRate * 100).toFixed(1)}%)
+        <input 
+          type="range"
+          min={0.01}
+          max={0.5}
+          step={0.005}
+          value={deathRate}
+          onChange={(e) => setDeathRate(parseFloat(e.target.value))}
+        />
+      </label>
+    </div>
+
+    <div>
+      <label>
+        Consumption Per Individual: {consumptionPerIndividual}
+        <input 
+          type="range"
+          min={1}
+          max={5}
+          step={0.2}
+          value={consumptionPerIndividual}
+          onChange={(e) => setConsumptionPerIndividual(parseFloat(e.target.value))}
+        />
+      </label>
+    </div>
+
+    <div>
+      <label>
+        Resource Regeneration Amount: {resourceRegenerationAmount}
+        <input 
+          type="range"
+          min={100}
+          max={1000}
+          step={5}
+          value={resourceRegenerationAmount}
+          onChange={(e) => setResourceRegenerationAmount(parseFloat(e.target.value))}
+        />
+      </label>
+    </div>
+
+    <div>
+      <label>
+        Regeneration Interval: {regenerationInterval}
+        <input 
+          type="range"
+          min={1}
+          max={10}
+          step={1}
+          value={regenerationInterval}
+          onChange={(e) => setRegenerationInterval(parseFloat(e.target.value))}
+        />
+      </label>
+    </div>
+
+    <div>
+      <label>
+        Max Resource Capacity: {maxResourceCapacity}
+        <input 
+          type="range"
+          min={500}
+          max={5000}
+          step={25}
+          value={maxResourceCapacity}
+          onChange={(e) => setMaxResourceCapacity(parseFloat(e.target.value))}
+        />
+      </label>
+    </div>
+    
+  </div>
+)}
       </div>
       
       <LineChart width={700} height={400} data={history}>
