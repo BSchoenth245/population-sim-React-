@@ -1,70 +1,167 @@
-# Getting Started with Create React App
+# Population Simulation
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+A React-based population dynamics simulator that models the relationship between population growth, resource consumption, and environmental carrying capacity using mathematical equations inspired by ecological modeling.
 
-## Available Scripts
+## Mathematical Model
 
-In the project directory, you can run:
+This simulation implements a discrete-time population model with resource constraints, combining elements from the logistic growth model and predator-prey dynamics.
 
-### `npm start`
+### Core Equations
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+**Population Change per Tick:**
+```
+New Population = Current Population + Births - Deaths
+```
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
+**Birth Calculation:**
+```
+Births = Population × Birth Rate
+```
 
-### `npm test`
+**Death Calculation (Resource-Dependent):**
+```
+Resources per Individual = Available Resources ÷ Population
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+If Resources per Individual < Consumption per Individual:
+    Death Rate Multiplier = Death Rate ÷ Resources per Individual
+    Deaths = Population × Death Rate Multiplier
+Else:
+    Deaths = Population × Death Rate
+```
 
-### `npm run build`
+**Resource Dynamics:**
+```
+Consumption = min(Population × Consumption per Individual, Available Resources)
+New Resources = Available Resources - Consumption
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+If (Tick Count % Regeneration Interval == 0):
+    Regenerated Resources = min(New Resources + Regeneration Amount, Max Capacity)
+```
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+### Key Mathematical Concepts
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+1. **Exponential Growth**: When resources are abundant, population grows exponentially at the birth rate
+2. **Resource Limitation**: As resources become scarce, death rates increase inversely proportional to resource availability
+3. **Carrying Capacity**: The maximum sustainable population is determined by resource regeneration vs. consumption rates
+4. **Oscillatory Dynamics**: The system can exhibit boom-bust cycles when population overshoots carrying capacity
 
-### `npm run eject`
+### Equilibrium Analysis
 
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
+The system reaches equilibrium when:
+```
+Birth Rate × Population = Death Rate × Population
+Resource Regeneration = Resource Consumption
+```
 
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+At equilibrium:
+```
+Sustainable Population ≈ (Regeneration Amount × Regeneration Frequency) ÷ Consumption per Individual
+```
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
+## Features
 
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
+- **Real-time Simulation**: Watch population dynamics unfold in real-time
+- **Interactive Parameters**: Adjust birth rates, death rates, consumption, and resource regeneration
+- **Visual Analytics**: Line chart showing population and resource trends over time
+- **Step-by-Step Mode**: Run individual simulation ticks for detailed analysis
+- **Reset Functionality**: Return to initial conditions at any time
 
-## Learn More
+## Setup Instructions
 
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
+### Prerequisites
 
-To learn React, check out the [React documentation](https://reactjs.org/).
+- Node.js (version 14 or higher)
+- npm (comes with Node.js)
 
-### Code Splitting
+### Installation
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
+1. **Clone or download the project**
+   ```bash
+   cd /path/to/population-sim(React)
+   ```
 
-### Analyzing the Bundle Size
+2. **Install dependencies**
+   ```bash
+   npm install
+   ```
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
+3. **Start the development server**
+   ```bash
+   npm start
+   ```
 
-### Making a Progressive Web App
+4. **Open your browser**
+   - Navigate to [http://localhost:3000](http://localhost:3000)
+   - The simulation will load automatically
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
+### Dependencies
 
-### Advanced Configuration
+- **React 19.2.1**: Core framework
+- **Recharts 3.5.1**: Data visualization library for the population/resource chart
+- **React Scripts 5.0.1**: Build and development tools
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
+## Usage
 
-### Deployment
+### Basic Controls
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
+- **Run One Tick**: Execute a single simulation step
+- **Start/Stop**: Toggle continuous simulation (updates every 300ms)
+- **Reset**: Return to initial conditions
+- **☰ Menu**: Show/hide parameter adjustment sliders
 
-### `npm run build` fails to minify
+### Adjustable Parameters
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+| Parameter | Range | Description |
+|-----------|-------|-------------|
+| Birth Rate | 1% - 50% | Probability of reproduction per individual per tick |
+| Death Rate | 1% - 50% | Base mortality rate per individual per tick |
+| Consumption per Individual | 1 - 5 | Resources consumed per individual per tick |
+| Resource Regeneration Amount | 100 - 1000 | Resources added every regeneration interval |
+| Regeneration Interval | 1 - 10 ticks | Frequency of resource regeneration |
+| Max Resource Capacity | 500 - 5000 | Environmental carrying capacity |
+
+### Initial Conditions
+
+- **Starting Population**: 100 individuals
+- **Starting Resources**: 450 units
+- **Default Birth Rate**: 12%
+- **Default Death Rate**: 10%
+
+## Experimental Scenarios
+
+Try these parameter combinations to observe different dynamics:
+
+1. **Stable Growth**: Birth Rate = 12%, Death Rate = 10%, Consumption = 1
+2. **Boom-Bust Cycles**: Birth Rate = 20%, Death Rate = 5%, Consumption = 2
+3. **Resource Crisis**: Birth Rate = 15%, Consumption = 3, Regeneration = 200
+4. **Sustainable Equilibrium**: Birth Rate = 10%, Death Rate = 10%, Consumption = 1.5
+
+## File Structure
+
+```
+src/
+├── App.js          # Main simulation component with all logic and UI
+├── index.js        # React app entry point
+└── index.css       # Basic styling
+```
+
+## Building for Production
+
+```bash
+npm run build
+```
+
+This creates an optimized production build in the `build/` folder ready for deployment.
+
+## Mathematical Extensions
+
+This model could be extended with:
+- Age-structured populations
+- Spatial dynamics (migration)
+- Multiple resource types
+- Environmental stochasticity
+- Genetic algorithms for parameter optimization
+
+## License
+
+This project is open source and available under the MIT License.
