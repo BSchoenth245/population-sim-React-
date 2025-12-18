@@ -5,6 +5,7 @@ function TemperatureTest() {
   const [data, setData] = useState([]);
   const [currentTick, setCurrentTick] = useState(0);
   const [showNoise, setShowNoise] = useState(true);
+  const [showExtremes, setShowExtremes] = useState(true);
   
   // Generate random phase offsets once when component loads
   const [phases] = useState({
@@ -12,7 +13,9 @@ function TemperatureTest() {
     daily: Math.random() * Math.PI * 2,
     noise1: Math.random() * Math.PI * 2,
     noise2: Math.random() * Math.PI * 2,
-    noise3: Math.random() * Math.PI * 2
+    noise3: Math.random() * Math.PI * 2,
+    extreme: Math.random() * Math.PI * 2,
+    extremeType: Math.random() * Math.PI * 2
   });
   
   // Triangle wave function for more even season distribution
@@ -39,10 +42,37 @@ function TemperatureTest() {
       2 * Math.sin(tick / 1.3 + phases.noise2) +
       1 * Math.sin(tick / 0.7 + phases.noise3);
     
+    let baseTemp = seasonalTemp + dailyVariation + weatherNoise;
+    
+    // Add rare extreme weather events (seasonal-appropriate)
+    const extremeChance = Math.sin(tick * 0.123 + phases.extreme) * 0.5 + 0.5;
+    const isExtreme = extremeChance > 0.95; // Top 5% = extreme event
+    
+    let finalTemp = baseTemp;
+    if (isExtreme) {
+      // Determine extreme type based on current season
+      let extremeType;
+      if (baseTemp > 70) {
+        // Summer: heat waves only
+        extremeType = 1;
+      } else if (baseTemp < 40) {
+        // Winter: cold snaps only
+        extremeType = -1;
+      } else {
+        // Spring/Fall: could be either
+        extremeType = Math.sin(tick * 0.456 + phases.extremeType) > 0 ? 1 : -1;
+      }
+      
+      const extremeMagnitude = 10 + Math.abs(Math.sin(tick * 0.789 + phases.extreme)) * 5; // 10-15°F
+      finalTemp += extremeType * extremeMagnitude;
+    }
+    
     return {
       seasonal: seasonalTemp,
       withDaily: seasonalTemp + dailyVariation,
-      withNoise: seasonalTemp + dailyVariation + weatherNoise
+      withNoise: baseTemp,
+      withExtremes: finalTemp,
+      isExtreme: isExtreme
     };
   };
   
@@ -53,6 +83,7 @@ function TemperatureTest() {
       const temps = calculateTemp(tick);
       tempData.push({
         tick: tick,
+        temperatureWithExtremes: Math.round(temps.withExtremes * 10) / 10,
         temperatureWithNoise: Math.round(temps.withNoise * 10) / 10,
         temperatureSmooth: Math.round(temps.withDaily * 10) / 10,
         seasonal: Math.round(temps.seasonal * 10) / 10
@@ -63,7 +94,8 @@ function TemperatureTest() {
   
   // Calculate current temperature and season
   const currentTemps = calculateTemp(currentTick);
-  const currentTemp = currentTemps.withNoise;
+  const currentTemp = currentTemps.withExtremes;
+  const isCurrentExtreme = currentTemps.isExtreme;
   
   // Determine current season based on temperature
   const getCurrentSeason = (temp) => {
@@ -90,7 +122,9 @@ function TemperatureTest() {
           <strong>Note:</strong> Triangle wave creates more balanced seasons with smooth peaks!
         </p>
         <p style={{ marginTop: '10px' }}><strong>Current Tick:</strong> {currentTick}</p>
-        <p><strong>Current Temperature:</strong> {currentTemp.toFixed(1)}°F</p>
+        <p><strong>Current Temperature:</strong> {currentTemp.toFixed(1)}°F 
+          {isCurrentExtreme && <span style={{ color: '#e74c3c', fontWeight: 'bold' }}> ⚠️ EXTREME EVENT</span>}
+        </p>
         <p><strong>Current Season:</strong> {currentSeason}</p>
       </div>
       
@@ -119,6 +153,16 @@ function TemperatureTest() {
             style={{ marginRight: '10px' }}
           />
           <strong>Show Weather Noise</strong>
+        </label>
+        
+        <label style={{ display: 'flex', alignItems: 'center', marginBottom: '10px' }}>
+          <input 
+            type="checkbox"
+            checked={showExtremes}
+            onChange={(e) => setShowExtremes(e.target.checked)}
+            style={{ marginRight: '10px' }}
+          />
+          <strong>Show Extreme Events</strong>
         </label>
         
         <label style={{ display: 'block', marginTop: '15px' }}>
@@ -150,14 +194,14 @@ function TemperatureTest() {
         
         {/* Season boundary lines */}
         <ReferenceLine 
-          y={45} 
+          y={40} 
           stroke="#3498db" 
           strokeWidth={2}
           strokeDasharray="5 5"
           label={{ value: 'Winter/Spring (40°F)', position: 'right', fill: '#3498db', fontSize: 12 }}
         />
         <ReferenceLine 
-          y={75} 
+          y={70} 
           stroke="#e74c3c" 
           strokeWidth={2}
           strokeDasharray="5 5"
@@ -181,14 +225,29 @@ function TemperatureTest() {
           dot={false}
         />
         {showNoise && (
-          <Line 
-            type="monotone" 
-            dataKey="temperatureWithNoise" 
-            stroke="#ff6b6b" 
-            strokeWidth={2}
-            name="With Weather Noise" 
-            dot={false}
-          />
+          <>
+            <Line 
+              type="monotone" 
+              dataKey="temperatureWithNoise" 
+              stroke="#95a5a6" 
+              strokeWidth={1.5}
+              name="With Weather Noise" 
+              dot={false}
+            />
+            </>
+        )}
+       
+        {showExtremes && (
+          <>
+            <Line 
+              type="monotone" 
+              dataKey="temperatureWithExtremes" 
+              stroke="#ff6b6b" 
+              strokeWidth={2}
+              name="With Extreme Events" 
+              dot={false}
+            />
+          </>
         )}
       </LineChart>
       
