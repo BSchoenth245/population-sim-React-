@@ -4,37 +4,70 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from 'r
 function TemperatureTest() {
   const [data, setData] = useState([]);
   const [currentTick, setCurrentTick] = useState(0);
+  const [showNoise, setShowNoise] = useState(true);
   
   // Generate initial data - showing multiple cycles
   useEffect(() => {
     const tempData = [];
     for (let tick = 0; tick <= 200; tick++) {
-      const temperature = 45 + 50 * Math.sin(tick / 10);
+      // Base seasonal temperature
+      const seasonalTemp = 45 + 50 * Math.sin(tick / 10);
+      
+      // Daily variation
+      const dailyVariation = 5 * Math.sin(tick / 2);
+      
+      // Weather noise (multiple sine waves at different frequencies)
+      const weatherNoise = 
+        3 * Math.sin(tick / 3.7) +
+        2 * Math.sin(tick / 1.3) +
+        1 * Math.sin(tick / 0.7);
+      
+      const temperatureWithNoise = seasonalTemp + dailyVariation + weatherNoise;
+      const temperatureSmooth = seasonalTemp + dailyVariation;
+      
       tempData.push({
         tick: tick,
-        temperature: Math.round(temperature * 10) / 10  // Round to 1 decimal
+        temperatureWithNoise: Math.round(temperatureWithNoise * 10) / 10,
+        temperatureSmooth: Math.round(temperatureSmooth * 10) / 10,
+        seasonal: Math.round(seasonalTemp * 10) / 10
       });
     }
     setData(tempData);
   }, []);
   
   // Calculate current temperature
-  const currentTemp = 45 + 50 * Math.sin(currentTick / 10);
+  const seasonalTemp = 45 + 50 * Math.sin(currentTick / 10);
+  const dailyVariation = 5 * Math.sin(currentTick / 2);
+  const weatherNoise = 
+    3 * Math.sin(currentTick / 3.7) +
+    2 * Math.sin(currentTick / 1.3) +
+    1 * Math.sin(currentTick / 0.7);
+  const currentTemp = seasonalTemp + dailyVariation + weatherNoise;
   
   return (
     <div style={{ padding: '20px', fontFamily: 'Arial, sans-serif' }}>
-      <h1>Temperature Sin Wave Test</h1>
+      <h1>Temperature Sin Wave Test (With Noise)</h1>
       
       <div style={{ marginBottom: '20px', padding: '15px', backgroundColor: '#f0f0f0', borderRadius: '5px' }}>
-        <p><strong>Formula:</strong> temperature = 45 + 50 × sin(ticks / 10)</p>
-        <p><strong>1 tick = 0.1 on x-axis</strong></p>
-        <p><strong>Current Tick:</strong> {currentTick}</p>
+        <p><strong>Seasonal:</strong> 45 + 50 × sin(ticks / 10)</p>
+        <p><strong>Daily Variation:</strong> 5 × sin(ticks / 2)</p>
+        <p><strong>Weather Noise:</strong> 3×sin(t/3.7) + 2×sin(t/1.3) + 1×sin(t/0.7)</p>
+        <p style={{ marginTop: '10px' }}><strong>Current Tick:</strong> {currentTick}</p>
         <p><strong>Current Temperature:</strong> {currentTemp.toFixed(1)}°F</p>
-        <p><strong>Range:</strong> -5°F to 95°F</p>
       </div>
       
       <div style={{ marginBottom: '20px' }}>
-        <label style={{ display: 'block', marginBottom: '10px' }}>
+        <label style={{ display: 'flex', alignItems: 'center', marginBottom: '10px' }}>
+          <input 
+            type="checkbox"
+            checked={showNoise}
+            onChange={(e) => setShowNoise(e.target.checked)}
+            style={{ marginRight: '10px' }}
+          />
+          <strong>Show Weather Noise</strong>
+        </label>
+        
+        <label style={{ display: 'block', marginTop: '15px' }}>
           <strong>Scrub through time (Tick: {currentTick}):</strong>
           <input 
             type="range"
@@ -62,23 +95,43 @@ function TemperatureTest() {
         <Legend />
         <Line 
           type="monotone" 
-          dataKey="temperature" 
-          stroke="#ff6b6b" 
+          dataKey="seasonal" 
+          stroke="#cccccc" 
+          strokeWidth={1}
+          name="Seasonal Only" 
+          dot={false}
+          strokeDasharray="5 5"
+        />
+        <Line 
+          type="monotone" 
+          dataKey="temperatureSmooth" 
+          stroke="#4ecdc4" 
           strokeWidth={2}
-          name="Temperature" 
+          name="With Daily Variation" 
           dot={false}
         />
+        {showNoise && (
+          <Line 
+            type="monotone" 
+            dataKey="temperatureWithNoise" 
+            stroke="#ff6b6b" 
+            strokeWidth={2}
+            name="With Weather Noise" 
+            dot={false}
+          />
+        )}
       </LineChart>
       
       <div style={{ marginTop: '20px', padding: '15px', backgroundColor: '#e8f5e9', borderRadius: '5px' }}>
-        <h3>Key Points:</h3>
+        <h3>Temperature Layers:</h3>
         <ul>
-          <li><strong>Tick 0:</strong> Temperature ≈ 45°F (middle)</li>
-          <li><strong>Peak (≈π/2 × 10 or tick ~15.7):</strong> Temperature = 95°F</li>
-          <li><strong>Valley (≈3π/2 × 10 or tick ~47.1):</strong> Temperature = -5°F</li>
-          <li><strong>Full cycle:</strong> Every 2π × 10 ≈ 62.8 ticks</li>
-          <li><strong>One year = ~63 ticks</strong> (if you think of it as seasonal)</li>
+          <li><strong>Gray dashed line:</strong> Seasonal baseline (smooth yearly cycle)</li>
+          <li><strong>Cyan line:</strong> + Daily temperature swings (~5°F)</li>
+          <li><strong>Red line:</strong> + Weather noise (realistic unpredictability)</li>
         </ul>
+        <p style={{ marginTop: '10px' }}>
+          <strong>Toggle the checkbox</strong> to see how the weather noise layer adds realistic variation!
+        </p>
       </div>
     </div>
   );
