@@ -6,57 +6,87 @@ function TemperatureTest() {
   const [currentTick, setCurrentTick] = useState(0);
   const [showNoise, setShowNoise] = useState(true);
   
-  // Generate initial data - showing multiple cycles
+  // Generate random phase offsets once when component loads
+  const [phases] = useState({
+    seasonal: Math.random() * Math.PI * 2,
+    daily: Math.random() * Math.PI * 2,
+    noise1: Math.random() * Math.PI * 2,
+    noise2: Math.random() * Math.PI * 2,
+    noise3: Math.random() * Math.PI * 2
+  });
+  
+  // Function to calculate temperature with phases
+  const calculateTemp = (tick) => {
+    const seasonalTemp = 45 + 50 * Math.sin(tick / 10 + phases.seasonal);
+    const dailyVariation = 5 * Math.sin(tick / 2 + phases.daily);
+    const weatherNoise = 
+      3 * Math.sin(tick / 3.7 + phases.noise1) +
+      2 * Math.sin(tick / 1.3 + phases.noise2) +
+      1 * Math.sin(tick / 0.7 + phases.noise3);
+    
+    return {
+      seasonal: seasonalTemp,
+      withDaily: seasonalTemp + dailyVariation,
+      withNoise: seasonalTemp + dailyVariation + weatherNoise
+    };
+  };
+  
+  // Generate initial data
   useEffect(() => {
     const tempData = [];
     for (let tick = 0; tick <= 200; tick++) {
-      // Base seasonal temperature
-      const seasonalTemp = 45 + 50 * Math.sin(tick / 10);
-      
-      // Daily variation
-      const dailyVariation = 5 * Math.sin(tick / 2);
-      
-      // Weather noise (multiple sine waves at different frequencies)
-      const weatherNoise = 
-        3 * Math.sin(tick / 3.7) +
-        2 * Math.sin(tick / 1.3) +
-        1 * Math.sin(tick / 0.7);
-      
-      const temperatureWithNoise = seasonalTemp + dailyVariation + weatherNoise;
-      const temperatureSmooth = seasonalTemp + dailyVariation;
-      
+      const temps = calculateTemp(tick);
       tempData.push({
         tick: tick,
-        temperatureWithNoise: Math.round(temperatureWithNoise * 10) / 10,
-        temperatureSmooth: Math.round(temperatureSmooth * 10) / 10,
-        seasonal: Math.round(seasonalTemp * 10) / 10
+        temperatureWithNoise: Math.round(temps.withNoise * 10) / 10,
+        temperatureSmooth: Math.round(temps.withDaily * 10) / 10,
+        seasonal: Math.round(temps.seasonal * 10) / 10
       });
     }
     setData(tempData);
-  }, []);
+  }, [phases]);
   
   // Calculate current temperature
-  const seasonalTemp = 45 + 50 * Math.sin(currentTick / 10);
-  const dailyVariation = 5 * Math.sin(currentTick / 2);
-  const weatherNoise = 
-    3 * Math.sin(currentTick / 3.7) +
-    2 * Math.sin(currentTick / 1.3) +
-    1 * Math.sin(currentTick / 0.7);
-  const currentTemp = seasonalTemp + dailyVariation + weatherNoise;
+  const currentTemps = calculateTemp(currentTick);
+  const currentTemp = currentTemps.withNoise;
+  
+  // Function to regenerate with new random phases
+  const regenerate = () => {
+    window.location.reload();
+  };
   
   return (
     <div style={{ padding: '20px', fontFamily: 'Arial, sans-serif' }}>
-      <h1>Temperature Sin Wave Test (With Noise)</h1>
+      <h1>Temperature Sin Wave Test (With Randomness)</h1>
       
       <div style={{ marginBottom: '20px', padding: '15px', backgroundColor: '#f0f0f0', borderRadius: '5px' }}>
-        <p><strong>Seasonal:</strong> 45 + 50 × sin(ticks / 10)</p>
-        <p><strong>Daily Variation:</strong> 5 × sin(ticks / 2)</p>
-        <p><strong>Weather Noise:</strong> 3×sin(t/3.7) + 2×sin(t/1.3) + 1×sin(t/0.7)</p>
+        <p><strong>Seasonal:</strong> 45 + 50 × sin(ticks / 10 + random_phase)</p>
+        <p><strong>Daily Variation:</strong> 5 × sin(ticks / 2 + random_phase)</p>
+        <p><strong>Weather Noise:</strong> 3×sin(t/3.7 + φ₁) + 2×sin(t/1.3 + φ₂) + 1×sin(t/0.7 + φ₃)</p>
+        <p style={{ marginTop: '10px', fontSize: '14px', color: '#666' }}>
+          <strong>Note:</strong> Each page load generates a unique temperature pattern!
+        </p>
         <p style={{ marginTop: '10px' }}><strong>Current Tick:</strong> {currentTick}</p>
         <p><strong>Current Temperature:</strong> {currentTemp.toFixed(1)}°F</p>
       </div>
       
       <div style={{ marginBottom: '20px' }}>
+        <button
+          onClick={regenerate}
+          style={{
+            padding: '10px 20px',
+            fontSize: '16px',
+            cursor: 'pointer',
+            backgroundColor: '#4ecdc4',
+            color: 'white',
+            border: 'none',
+            borderRadius: '5px',
+            marginBottom: '15px'
+          }}
+        >
+          Generate New Random Pattern
+        </button>
+        
         <label style={{ display: 'flex', alignItems: 'center', marginBottom: '10px' }}>
           <input 
             type="checkbox"
@@ -123,15 +153,13 @@ function TemperatureTest() {
       </LineChart>
       
       <div style={{ marginTop: '20px', padding: '15px', backgroundColor: '#e8f5e9', borderRadius: '5px' }}>
-        <h3>Temperature Layers:</h3>
+        <h3>How Randomness Works:</h3>
         <ul>
-          <li><strong>Gray dashed line:</strong> Seasonal baseline (smooth yearly cycle)</li>
-          <li><strong>Cyan line:</strong> + Daily temperature swings (~5°F)</li>
-          <li><strong>Red line:</strong> + Weather noise (realistic unpredictability)</li>
+          <li><strong>Phase offsets:</strong> Each sine wave starts at a random point in its cycle</li>
+          <li><strong>Smooth but unique:</strong> Pattern is different every time, but still realistic</li>
+          <li><strong>Click "Generate New Random Pattern"</strong> to see a completely different temperature curve!</li>
+          <li><strong>Same simulation run:</strong> Temperature stays consistent within one simulation</li>
         </ul>
-        <p style={{ marginTop: '10px' }}>
-          <strong>Toggle the checkbox</strong> to see how the weather noise layer adds realistic variation!
-        </p>
       </div>
     </div>
   );
