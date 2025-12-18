@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from 'recharts';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ReferenceLine } from 'recharts';
 
 function TemperatureTest() {
   const [data, setData] = useState([]);
@@ -15,9 +15,24 @@ function TemperatureTest() {
     noise3: Math.random() * Math.PI * 2
   });
   
+  // Triangle wave function for more even season distribution
+  const triangleWave = (t) => {
+    const x = (t % (Math.PI * 4)) / (Math.PI * 4); // 0 to 1
+    if (x < 0.5) return x * 4 - 1; // -1 to 1 (rising)
+    return 3 - x * 4; // 1 to -1 (falling)
+  };
+  
   // Function to calculate temperature with phases
   const calculateTemp = (tick) => {
-    const seasonalTemp = 45 + 50 * Math.sin(tick / 10 + phases.seasonal);
+    // Get both triangle and sine waves
+    const triangle = triangleWave(tick / 10 + phases.seasonal);
+    const sine = Math.sin(tick / 10 + phases.seasonal);
+    
+    // Blend them: 70% triangle (even seasons) + 30% sine (smooth peaks)
+    const blendFactor = 0.7;
+    const blended = triangle * blendFactor + sine * (1 - blendFactor);
+    
+    const seasonalTemp = 45 + 50 * blended;
     const dailyVariation = 5 * Math.sin(tick / 2 + phases.daily);
     const weatherNoise = 
       3 * Math.sin(tick / 3.7 + phases.noise1) +
@@ -46,9 +61,17 @@ function TemperatureTest() {
     setData(tempData);
   }, [phases]);
   
-  // Calculate current temperature
+  // Calculate current temperature and season
   const currentTemps = calculateTemp(currentTick);
   const currentTemp = currentTemps.withNoise;
+  
+  // Determine current season based on temperature
+  const getCurrentSeason = (temp) => {
+    if (temp < 40) return 'Winter';
+    if (temp >= 40 && temp < 70) return 'Spring/Fall';
+    return 'Summer';
+  };
+  const currentSeason = getCurrentSeason(currentTemp);
   
   // Function to regenerate with new random phases
   const regenerate = () => {
@@ -60,14 +83,15 @@ function TemperatureTest() {
       <h1>Temperature Sin Wave Test (With Randomness)</h1>
       
       <div style={{ marginBottom: '20px', padding: '15px', backgroundColor: '#f0f0f0', borderRadius: '5px' }}>
-        <p><strong>Seasonal:</strong> 45 + 50 × sin(ticks / 10 + random_phase)</p>
+        <p><strong>Seasonal:</strong> Blended triangle (70%) + sine (30%) wave</p>
         <p><strong>Daily Variation:</strong> 5 × sin(ticks / 2 + random_phase)</p>
         <p><strong>Weather Noise:</strong> 3×sin(t/3.7 + φ₁) + 2×sin(t/1.3 + φ₂) + 1×sin(t/0.7 + φ₃)</p>
         <p style={{ marginTop: '10px', fontSize: '14px', color: '#666' }}>
-          <strong>Note:</strong> Each page load generates a unique temperature pattern!
+          <strong>Note:</strong> Triangle wave creates more balanced seasons with smooth peaks!
         </p>
         <p style={{ marginTop: '10px' }}><strong>Current Tick:</strong> {currentTick}</p>
         <p><strong>Current Temperature:</strong> {currentTemp.toFixed(1)}°F</p>
+        <p><strong>Current Season:</strong> {currentSeason}</p>
       </div>
       
       <div style={{ marginBottom: '20px' }}>
@@ -123,6 +147,22 @@ function TemperatureTest() {
         />
         <Tooltip />
         <Legend />
+        
+        {/* Season boundary lines */}
+        <ReferenceLine 
+          y={45} 
+          stroke="#3498db" 
+          strokeWidth={2}
+          strokeDasharray="5 5"
+          label={{ value: 'Winter/Spring (40°F)', position: 'right', fill: '#3498db', fontSize: 12 }}
+        />
+        <ReferenceLine 
+          y={75} 
+          stroke="#e74c3c" 
+          strokeWidth={2}
+          strokeDasharray="5 5"
+          label={{ value: 'Spring/Summer (70°F)', position: 'right', fill: '#e74c3c', fontSize: 12 }}
+        />
         <Line 
           type="monotone" 
           dataKey="seasonal" 
@@ -160,6 +200,16 @@ function TemperatureTest() {
           <li><strong>Click "Generate New Random Pattern"</strong> to see a completely different temperature curve!</li>
           <li><strong>Same simulation run:</strong> Temperature stays consistent within one simulation</li>
         </ul>
+        
+        <h3 style={{ marginTop: '15px' }}>Temperature-Based Seasons:</h3>
+        <ul>
+          <li><strong>Winter:</strong> Below 40°F</li>
+          <li><strong>Spring/Fall:</strong> 40-70°F</li>
+          <li><strong>Summer:</strong> Above 70°F</li>
+        </ul>
+        <p style={{ fontSize: '14px', color: '#666' }}>
+          Seasons are determined by current temperature, not fixed time periods!
+        </p>
       </div>
     </div>
   );
