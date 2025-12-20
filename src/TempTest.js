@@ -56,9 +56,9 @@ const SEASON_COLORS = {
   These define how temperature affects food production.
 */
 const CROP_CONFIG = {
-  optimalTemp: 72,      // Temperature (°F) where crop grows best
-  tolerance: 12,        // How forgiving the crop is to temp deviation (higher = more resilient)
-  maxGrowth: 8,         // Maximum food units produced per day at optimal temp
+  optimalTemp: 65,      // Temperature (°F) where crop grows best
+  tolerance: 18,        // How forgiving the crop is to temp deviation (higher = more resilient)
+  maxGrowth: 10,         // Maximum food units produced per day at optimal temp
   minGrowth: 0.2        // Minimum growth even in terrible conditions (prevents starvation deadlock)
 };
 
@@ -379,6 +379,21 @@ export default function TemperatureSimulation() {
         });
       })}
 
+      {/* Show current day as a vertical line */}
+      {currentDay >= 0 && (
+        <ReferenceLine 
+          x={currentDay} 
+          stroke="#2ecc71" 
+          strokeWidth={2}
+          label={{ 
+            value: `Day ${currentDay}`, 
+            position: 'top',
+            fill: '#2ecc71',
+            fontSize: 12
+          }}
+        />
+      )}
+
       <Line
         type="monotone"
         dataKey="temperature"
@@ -462,6 +477,21 @@ export default function TemperatureSimulation() {
         });
       })}
 
+      {/* Show current day as a vertical line */}
+      {currentDay >= 0 && (
+        <ReferenceLine 
+          x={currentDay} 
+          stroke="#2ecc71" 
+          strokeWidth={2}
+          label={{ 
+            value: `Day ${currentDay}`, 
+            position: 'top',
+            fill: '#2ecc71',
+            fontSize: 12
+          }}
+        />
+      )}
+
       <Line
         type="monotone"
         dataKey="food"
@@ -533,7 +563,11 @@ export default function TemperatureSimulation() {
       }}
     />
     
-    <Legend />
+    <Legend
+        verticalAlign="bottom"
+        align="center"
+        wrapperStyle={{ paddingTop: 10 }}
+      />
     
     {/* Vertical line at optimal temperature */}
     <ReferenceLine 
