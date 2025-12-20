@@ -1,4 +1,26 @@
+/* ============================================================
+   Temperature + Food Simulation
+   ------------------------------------------------------------
+   This component models:
+   - A deterministic, seeded climate system
+   - Temperature-driven crop growth
+   - Daily food consumption
+   - Visualization of all systems over time
+
+   Design goals:
+   - Smoothness over hyper-realism
+   - Determinism per seed (replayable worlds)
+   - Explainability at every layer
+   - Clear extension points for future systems
+   ============================================================ */
+
 import { useEffect, useState } from 'react';
+
+/*
+  Recharts is used strictly for visualization.
+  All simulation logic is computed beforehand and passed in
+  as plain data so it can later be reused outside React.
+*/
 import {
   LineChart,
   Line,
@@ -15,12 +37,22 @@ import {
    === SIMULATION CONSTANTS ===================================
    ============================================================ */
 
+/*
+  Base temporal resolution.
+
+  Internally, the simulation operates in whole days.
+  Charts may use fractional offsets to show intra-day phases.
+*/
 const DAYS_PER_YEAR = 365;
 const YEAR_COUNT = 1;
 const TOTAL_DAYS = DAYS_PER_YEAR * YEAR_COUNT;
 
 /*
-  Seasons are time-based and must sum to 365.
+  Seasonal definitions.
+
+  IMPORTANT:
+  - Lengths must sum to exactly 365
+  - Otherwise seasonal boundaries will drift
 */
 const SEASONS = [
   { name: 'Winter', length: 90 },
@@ -30,8 +62,11 @@ const SEASONS = [
 ];
 
 /*
-  Seasonal climate targets.
-  Used for shaping, NOT forcing.
+  Seasonal climate tendencies.
+
+  These do NOT hard-lock temperatures.
+  They bias the baseline so seasons feel distinct
+  while remaining smooth and continuous.
 */
 const SEASON_PROFILES = {
   Winter: { mean: 15, amp: 10 },
@@ -41,8 +76,8 @@ const SEASON_PROFILES = {
 };
 
 /*
-  Background colors for seasons.
-  These repeat once per year.
+  Background colors for seasonal shading.
+  Used in both temperature and food charts.
 */
 const SEASON_COLORS = {
   Winter: 'rgba(173, 216, 230, 0.25)',
@@ -52,24 +87,30 @@ const SEASON_COLORS = {
 };
 
 /*
-  Crop growth parameters.
-  These define how temperature affects food production.
+  Crop growth configuration.
+
+  Defines the temperature → growth curve.
+  The model is continuous, symmetric, and never zero-output.
 */
 const CROP_CONFIG = {
-  optimalTemp: 65,      // Temperature (°F) where crop grows best
-  tolerance: 18,        // How forgiving the crop is to temp deviation (higher = more resilient)
-  maxGrowth: 10,         // Maximum food units produced per day at optimal temp
-  minGrowth: 0.2        // Minimum growth even in terrible conditions (prevents starvation deadlock)
+  optimalTemp: 65,   // °F where crops grow best
+  tolerance: 18,     // Controls bell-curve width
+  maxGrowth: 10,     // Daily growth at optimal temp
+  minGrowth: 0.2     // Floor to avoid total collapse
 };
 
 /*
-  Daily consumption rate.
-  For now, this is constant. Later you'll multiply by population.
+  Daily food consumption.
+
+  Designed to later scale with population,
+  policy modifiers, or rationing.
 */
 const DAILY_CONSUMPTION = 5;
 
 /*
-  Starting food stockpile.
+  Initial food stockpile.
+
+  Acts as an early buffer against bad weather streaks.
 */
 const STARTING_FOOD = 100;
 
@@ -78,7 +119,16 @@ const STARTING_FOOD = 100;
    ============================================================ */
 
 /**
- * Returns the season and progress (0–1) for a given day of year.
+ * Determine the active season for a given day of the year.
+ *
+ * @param {number} dayOfYear - Integer from 0 to 364
+ * @returns {{
+ *   name: string,
+ *   progress: number
+ * }}
+ *
+ * progress is normalized (0 → 1) within the season
+ * and is used for smooth intra-season curves.
  */
 function getSeasonForDay(dayOfYear) {
   let accumulated = 0;
@@ -93,14 +143,23 @@ function getSeasonForDay(dayOfYear) {
     accumulated += season.length;
   }
 
+  // Defensive fallback (should never occur)
   return { name: 'Winter', progress: 0 };
 }
 
 /**
- * Smooth annual temperature baseline.
- * Ensures continuity and summer-centered peak.
+ * Generate the smooth annual temperature baseline.
+ *
+ * This function represents the "climate backbone".
+ * All noise, daily swings, and extreme events are layered on top.
+ *
+ * @param {string} seasonName - Current season name
+ * @param {number} progress - Normalized progress through the season (0–1)
+ * @param {number} dayOfYear - Day index within the year
+ * @returns {number} Baseline temperature in °F
  */
 function seasonalBaseline(seasonName, progress, dayOfYear) {
+  // Phase shift so summer peaks correctly
   const WAVE_SHIFT_DAYS = -45;
 
   const annualProgress =
@@ -109,11 +168,13 @@ function seasonalBaseline(seasonName, progress, dayOfYear) {
   const annualMean = 52;
   const annualAmplitude = 22;
 
+  // Primary annual sine wave
   const annualWave =
     annualMean +
     annualAmplitude *
       Math.sin(2 * Math.PI * (annualProgress - 0.25));
 
+  // Small seasonal offsets for asymmetry
   const seasonOffsets = {
     Winter: -5,
     Spring: 0,
@@ -121,8 +182,8 @@ function seasonalBaseline(seasonName, progress, dayOfYear) {
     Fall:   0
   };
 
+  // Gentle curvature within each season
   const amp = SEASON_PROFILES[seasonName]?.amp ?? 0;
-
   const intraSeason =
     amp *
     Math.sin(progress * Math.PI) *
@@ -132,12 +193,18 @@ function seasonalBaseline(seasonName, progress, dayOfYear) {
 }
 
 /**
- * Rare, deterministic extreme events.
+ * Inject rare but deterministic extreme weather events.
+ *
+ * @param {number} dayIndex - Absolute day index
+ * @param {string} seasonName - Current season
+ * @param {number} seed - Simulation seed
+ * @returns {number} Temperature delta (°F)
  */
 function extremeEvent(dayIndex, seasonName, seed) {
-  const signal = Math.sin(dayIndex * 0.173 + seed * 100) * 0.5 + 0.5;
+  const signal =
+    Math.sin(dayIndex * 0.173 + seed * 100) * 0.5 + 0.5;
 
-
+  // Most days have no extreme event
   if (signal < 0.97) return 0;
 
   const magnitude =
@@ -146,56 +213,71 @@ function extremeEvent(dayIndex, seasonName, seed) {
   if (seasonName === 'Summer') return +magnitude;
   if (seasonName === 'Winter') return -magnitude;
 
+  // Shoulder seasons can swing either way
   return Math.sin(dayIndex * 0.37) > 0
     ? +magnitude
     : -magnitude;
 }
 
 /**
- * Calculate food growth based on temperature.
- * Uses a bell curve (Gaussian) centered on optimal temperature.
- * 
- * @param {number} temperature - Current day's temperature in °F
+ * Convert temperature into daily food growth.
+ *
+ * Uses a Gaussian bell curve centered on optimalTemp.
+ *
+ * @param {number} temperature - Daily average temperature (°F)
  * @returns {number} Food units produced this day
- * 
- * How it works:
- * - At optimalTemp: produces maxGrowth
- * - As temp deviates: production drops exponentially
- * - Never drops below minGrowth (prevents zero-growth deadlock)
- * 
- * The formula: minGrowth + maxGrowth * e^(-(deviation²) / (2 * tolerance²))
- * This is a standard Gaussian/normal distribution bell curve.
  */
 function calculateGrowth(temperature) {
   const { optimalTemp, tolerance, maxGrowth, minGrowth } = CROP_CONFIG;
-  
-  // How far is current temp from optimal? (can be positive or negative)
+
   const deviation = temperature - optimalTemp;
-  
-  // Bell curve calculation
-  // - deviation² makes both hot and cold equally bad
-  // - tolerance² controls how "wide" the bell is
-  // - The exp() creates the smooth dropoff
-  const bellCurve = Math.exp(-(deviation ** 2) / (2 * tolerance ** 2));
-  
-  // Scale the bell curve to our growth range
-  // Result ranges from minGrowth (terrible conditions) to minGrowth + maxGrowth (perfect conditions)
+
+  const bellCurve =
+    Math.exp(-(deviation ** 2) / (2 * tolerance ** 2));
+
   return minGrowth + maxGrowth * bellCurve;
 }
 
 /* ============================================================
-   === MAIN COMPONENT =========================================
+   === MAIN REACT COMPONENT ==================================
    ============================================================ */
 
 export default function TemperatureSimulation() {
+  /*
+    Full temperature timeline.
+    One entry per day.
+  */
   const [data, setData] = useState([]);
+
+  /*
+    Currently selected day (scrubber-controlled).
+  */
   const [currentDay, setCurrentDay] = useState(0);
+
+  /*
+    Seed controlling all pseudo-random variation.
+    Changing this regenerates the entire world.
+  */
   const [seed, setSeed] = useState(Math.random());
+
+  /*
+    Food timeline.
+    Two entries per day:
+    - After growth
+    - After consumption
+  */
   const [foodData, setFoodData] = useState([]);
 
+  /*
+    Generate both temperature and food simulations
+    whenever the seed changes.
+  */
   useEffect(() => {
     const generated = [];
 
+    /* ==============================
+       TEMPERATURE SIMULATION
+       ============================== */
     for (let dayIndex = 0; dayIndex < TOTAL_DAYS; dayIndex++) {
       const year = Math.floor(dayIndex / DAYS_PER_YEAR);
       const dayOfYear = dayIndex % DAYS_PER_YEAR;
@@ -208,15 +290,17 @@ export default function TemperatureSimulation() {
         dayOfYear
       );
 
+      // Weekly oscillation (weather fronts)
       const daily =
         5 * Math.sin((2 * Math.PI * dayIndex) / 7);
 
+      // Longer-term noise layers
       const noise =
         3 * Math.sin(dayIndex / 11.3 + seed * 10) +
         2 * Math.sin(dayIndex / 4.7 + seed * 20);
 
-
-      const extreme = extremeEvent(dayIndex, season.name, seed);
+      const extreme =
+        extremeEvent(dayIndex, season.name, seed);
 
       const temp = base + daily + noise + extreme;
       const safeTemp = Number.isFinite(temp) ? temp : 0;
@@ -231,87 +315,77 @@ export default function TemperatureSimulation() {
     }
 
     setData(generated);
-    
-    // === FOOD PRODUCTION SIMULATION ===
-    // Generate food data based on temperature
-    // Each day has TWO datapoints: after growth, after consumption
+
+    /* ==============================
+       FOOD PRODUCTION SIMULATION
+       ============================== */
     const foodSimulation = [];
     let currentFood = STARTING_FOOD;
-    
+
     for (let dayIndex = 0; dayIndex < TOTAL_DAYS; dayIndex++) {
-      // Get this day's temperature from our generated data
       const temp = generated[dayIndex].temperature;
-      
-      // Calculate how much food grows based on temperature
       const growth = calculateGrowth(temp);
-      
-      // === MORNING: After growth ===
+
+      // --- MORNING: harvest completes ---
       currentFood += growth;
       foodSimulation.push({
-        x: dayIndex,              // Exact day (e.g., day 50.0)
-        food: Math.round(currentFood * 10) / 10,  // Round to 1 decimal
-        phase: 'growth',          // Label for debugging
-        growth: Math.round(growth * 10) / 10  // Store growth amount for tooltip
+        x: dayIndex,
+        food: Math.round(currentFood * 10) / 10,
+        phase: 'growth',
+        growth: Math.round(growth * 10) / 10
       });
-      
-      // === MIDDAY: After consumption ===
+
+      // --- MIDDAY: population consumes ---
       currentFood -= DAILY_CONSUMPTION;
-      
-      // Don't let food go negative (starvation would happen here in full sim)
       if (currentFood < 0) currentFood = 0;
-      
+
       foodSimulation.push({
-        x: dayIndex + 0.5,        // Half-day offset (e.g., day 50.5)
+        x: dayIndex + 0.5,
         food: Math.round(currentFood * 10) / 10,
         phase: 'consumption',
         consumed: DAILY_CONSUMPTION
       });
     }
-    
+
     setFoodData(foodSimulation);
   }, [seed]);
 
+  /*
+    Currently selected day's temperature data.
+  */
   const current = data[currentDay] ?? {};
+
+  /* ============================================================
+     === UI & VISUALIZATION ===================================
+     ============================================================ */
 
   return (
     <div style={{ padding: 20, fontFamily: 'Arial, sans-serif' }}>
-      <h1>Multi-Year Temperature Simulation</h1>
-
-      <p>
-        This simulation models daily temperatures across multiple years using
-        smooth seasonal cycles, short-term variability, and rare extreme events.
-      </p>
+      <h1>Multi-Year Temperature & Food Simulation</h1>
 
       {/* === CURRENT DAY READOUT === */}
       <div style={{ marginBottom: 15, padding: 10, background: '#f4f4f4' }}>
-        <strong>Day:</strong> {currentDay} <br />
-        <strong>Year:</strong> {current.year + 1 ?? '-'} <br />
-        <strong>Season:</strong> {current.season ?? '-'} <br />
-        <strong>Temperature:</strong> {current.temperature ?? '-'} °F <br />
-        <strong>Food Stock:</strong> {foodData[currentDay * 2]?.food ?? '-'} units <br />
-        <strong>Consumption Rate:</strong> {DAILY_CONSUMPTION} units/day <br />
-        <strong>Daily Growth:</strong> {current.temperature ? calculateGrowth(current.temperature).toFixed(1) : '-'} units/day
+        <strong>Day:</strong> {currentDay}<br />
+        <strong>Year:</strong> {current.year + 1 ?? '-'}<br />
+        <strong>Season:</strong> {current.season ?? '-'}<br />
+        <strong>Temperature:</strong> {current.temperature ?? '-'} °F<br />
+        <strong>Food Stock:</strong> {foodData[currentDay * 2]?.food ?? '-'} units<br />
+        <strong>Consumption Rate:</strong> {DAILY_CONSUMPTION} units/day<br />
+        <strong>Daily Growth:</strong>{' '}
+        {current.temperature
+          ? calculateGrowth(current.temperature).toFixed(1)
+          : '-'} units/day
       </div>
 
+      {/* === REGENERATE BUTTON === */}
       <button
         onClick={() => {
           setSeed(Math.random());
           setCurrentDay(0);
         }}
-        style={{
-          padding: '10px 16px',
-          fontSize: '16px',
-          marginBottom: '10px',
-          backgroundColor: '#4ecdc4',
-          color: 'white',
-          border: 'none',
-          borderRadius: '6px',
-          cursor: 'pointer'
-        }}
       >
-        Generate New Temperature Pattern
+        Generate New Climate
       </button>
-
 
       {/* === SCRUBBER === */}
       <label style={{ display: 'block' }}>
