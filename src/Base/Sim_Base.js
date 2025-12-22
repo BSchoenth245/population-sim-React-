@@ -81,9 +81,9 @@ const SEASON_PROFILES = {
 */
 const SEASON_COLORS = {
   Winter: 'rgba(173, 216, 230, 0.25)',
-  Spring: 'rgba(144, 238, 144, 0.25)',
-  Summer: 'rgba(255, 182, 193, 0.25)',
-  Fall:   'rgba(222, 184, 135, 0.25)'
+  Spring: 'rgba(222, 208, 135, 0.25)',
+  Summer: 'rgba(144, 238, 144, 0.25)',
+  Fall:   'rgba(222, 174, 135, 0.25)'
 };
 
 /*
@@ -94,7 +94,7 @@ const SEASON_COLORS = {
 */
 const CROP_CONFIG = {
   optimalTemp: 65,   // °F where crops grow best
-  tolerance: 18,     // Controls bell-curve width
+  tolerance: 12,     // Controls bell-curve width
   maxGrowth: 10,     // Daily growth at optimal temp
   minGrowth: 0.2     // Floor to avoid total collapse
 };
@@ -292,12 +292,12 @@ export default function TemperatureSimulation() {
 
       // Weekly oscillation (weather fronts)
       const daily =
-        5 * Math.sin((2 * Math.PI * dayIndex) / 7);
+        2 * Math.sin((2 * Math.PI * dayIndex) / 7);
 
       // Longer-term noise layers
       const noise =
-        3 * Math.sin(dayIndex / 11.3 + seed * 10) +
-        2 * Math.sin(dayIndex / 4.7 + seed * 20);
+        3 * Math.sin(dayIndex / 20 + seed * 10) +
+        2 * Math.sin(dayIndex / 10 + seed * 20);
 
       const extreme =
         extremeEvent(dayIndex, season.name, seed);
