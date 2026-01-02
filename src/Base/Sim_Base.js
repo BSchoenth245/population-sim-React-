@@ -33,86 +33,12 @@ import {
   ReferenceLine
 } from 'recharts';
 
-/* ============================================================
-   === SIMULATION CONSTANTS ===================================
-   ============================================================ */
-
-/*
-  Base temporal resolution.
-
-  Internally, the simulation operates in whole days.
-  Charts may use fractional offsets to show intra-day phases.
-*/
-const DAYS_PER_YEAR = 365;
-const YEAR_COUNT = 1;
-const TOTAL_DAYS = DAYS_PER_YEAR * YEAR_COUNT;
-
-/*
-  Seasonal definitions.
-
-  IMPORTANT:
-  - Lengths must sum to exactly 365
-  - Otherwise seasonal boundaries will drift
-*/
-const SEASONS = [
-  { name: 'Winter', length: 90 },
-  { name: 'Spring', length: 92 },
-  { name: 'Summer', length: 92 },
-  { name: 'Fall',   length: 91 }
-];
-
-/*
-  Seasonal climate tendencies.
-
-  These do NOT hard-lock temperatures.
-  They bias the baseline so seasons feel distinct
-  while remaining smooth and continuous.
-*/
-const SEASON_PROFILES = {
-  Winter: { mean: 15, amp: 10 },
-  Spring: { mean: 65, amp: 12 },
-  Summer: { mean: 90, amp: 10 },
-  Fall:   { mean: 55, amp: 12 }
-};
-
-/*
-  Background colors for seasonal shading.
-  Used in both temperature and food charts.
-*/
 const SEASON_COLORS = {
   Winter: 'rgba(173, 216, 230, 0.25)',
   Spring: 'rgba(222, 208, 135, 0.25)',
   Summer: 'rgba(144, 238, 144, 0.25)',
   Fall:   'rgba(222, 174, 135, 0.25)'
 };
-
-/*
-  Crop growth configuration.
-
-  Defines the temperature → growth curve.
-  The model is continuous, symmetric, and never zero-output.
-*/
-const CROP_CONFIG = {
-  optimalTemp: 65,   // °F where crops grow best
-  tolerance: 12,     // Controls bell-curve width
-  maxGrowth: 10,     // Daily growth at optimal temp
-  minGrowth: 0.2     // Floor to avoid total collapse
-};
-
-/*
-  Daily food consumption.
-
-  Designed to later scale with population,
-  policy modifiers, or rationing.
-*/
-const DAILY_CONSUMPTION = 5;
-
-/*
-  Initial food stockpile.
-
-  Acts as an early buffer against bad weather streaks.
-*/
-const STARTING_FOOD = 100;
 
 /* ============================================================
    === HELPER FUNCTIONS =======================================
@@ -130,10 +56,10 @@ const STARTING_FOOD = 100;
  * progress is normalized (0 → 1) within the season
  * and is used for smooth intra-season curves.
  */
-function getSeasonForDay(dayOfYear) {
+function getSeasonForDay(dayOfYear, seasons) {
   let accumulated = 0;
 
-  for (const season of SEASONS) {
+  for (const season of seasons) {
     if (dayOfYear < accumulated + season.length) {
       return {
         name: season.name,
@@ -158,12 +84,15 @@ function getSeasonForDay(dayOfYear) {
  * @param {number} dayOfYear - Day index within the year
  * @returns {number} Baseline temperature in °F
  */
-function seasonalBaseline(seasonName, progress, dayOfYear) {
+function seasonalBaseline(seasonName, progress, dayOfYear, seasonProfiles, seasonOffset = 0) {
   // Phase shift so summer peaks correctly
   const WAVE_SHIFT_DAYS = -45;
 
+  // Apply season offset to shift the temperature curve
+  const shiftedDay = (dayOfYear + 365 + seasonOffset) % 365;
+
   const annualProgress =
-    (dayOfYear + WAVE_SHIFT_DAYS) / DAYS_PER_YEAR;
+    (shiftedDay + WAVE_SHIFT_DAYS) / 365;
 
   const annualMean = 52;
   const annualAmplitude = 22;
@@ -183,7 +112,7 @@ function seasonalBaseline(seasonName, progress, dayOfYear) {
   };
 
   // Gentle curvature within each season
-  const amp = SEASON_PROFILES[seasonName]?.amp ?? 0;
+  const amp = seasonProfiles[seasonName]?.amp ?? 0;
   const intraSeason =
     amp *
     Math.sin(progress * Math.PI) *
@@ -227,8 +156,8 @@ function extremeEvent(dayIndex, seasonName, seed) {
  * @param {number} temperature - Daily average temperature (°F)
  * @returns {number} Food units produced this day
  */
-function calculateGrowth(temperature) {
-  const { optimalTemp, tolerance, maxGrowth, minGrowth } = CROP_CONFIG;
+function calculateGrowth(temperature, cropConfig) {
+  const { optimalTemp, tolerance, maxGrowth, minGrowth } = cropConfig;
 
   const deviation = temperature - optimalTemp;
 
@@ -238,56 +167,238 @@ function calculateGrowth(temperature) {
   return minGrowth + maxGrowth * bellCurve;
 }
 
-/* ============================================================
-   === MAIN REACT COMPONENT ==================================
-   ============================================================ */
+/*  ============================================================
+    === MAIN REACT COMPONENT ==================================
+    ============================================================ */
 
 export default function TemperatureSimulation() {
-  /*
-    Full temperature timeline.
-    One entry per day.
-  */
-  const [data, setData] = useState([]);
+  /*============================================================
+    === COMPONENT STATE ========================================
+    ============================================================ */
 
-  /*
-    Currently selected day (scrubber-controlled).
-  */
-  const [currentDay, setCurrentDay] = useState(0);
+/*
+  Full temperature timeline.
+  One entry per day containing: dayIndex, year, dayOfYear, season, temperature
+*/
+const [data, setData] = useState([]);
 
-  /*
-    Seed controlling all pseudo-random variation.
-    Changing this regenerates the entire world.
-  */
-  const [seed, setSeed] = useState(Math.random());
+/*
+  Current day being viewed (controlled by scrubber slider).
+  Range: 0 to totalDays - 1
+*/
+const [currentDay, setCurrentDay] = useState(0);
 
-  /*
-    Food timeline.
-    Two entries per day:
-    - After growth
-    - After consumption
-  */
-  const [foodData, setFoodData] = useState([]);
+/*
+  Random seed for deterministic generation.
+  Same seed = same weather pattern.
+  Changes when user clicks "Generate New Pattern".
+*/
+const [seed, setSeed] = useState(Math.random());
 
-  /*
-    Generate both temperature and food simulations
-    whenever the seed changes.
-  */
+const [activeConfig, setActiveConfig] = useState({
+  yearCount: 1,
+  winterLength: 90,
+  springLength: 92,
+  summerLength: 92,
+  fallLength: 91,
+  winterMean: 15,
+  winterAmp: 10,
+  springMean: 65,
+  springAmp: 12,
+  summerMean: 90,
+  summerAmp: 10,
+  fallMean: 55,
+  fallAmp: 12,
+  optimalTemp: 65,
+  tolerance: 18,
+  maxGrowth: 10,
+  minGrowth: 0.2,
+  dailyConsumption: 5,
+  startingFood: 100,
+  startingSeason: 'Spring'
+});
+
+const [workingConfig, setWorkingConfig] = useState({...activeConfig});
+
+/*
+  Food stock timeline.
+  Two entries per day: one after growth (x: day), one after consumption (x: day + 0.5).
+  Creates the sawtooth pattern visible on food chart.
+*/
+const [foodData, setFoodData] = useState([]);
+
+/*
+  Controls visibility of the settings side panel.
+  true = panel slides in from right, false = panel hidden
+*/
+const [showSettings, setShowSettings] = useState(false);
+
+// === TIME SETTINGS ===
+/*
+  Number of years to simulate.
+  Total days = yearCount × 365
+  Affects: simulation length, chart x-axis domain
+*/
+const [yearCount, setYearCount] = useState(1);
+
+// === SEASON LENGTHS ===
+/*
+  Length of each season in days.
+  CRITICAL: These four values MUST sum to 365 for proper year cycling.
+  Validation logic will prevent invalid combinations.
+  Used for: seasonal background shading, season determination, extreme event logic
+*/
+const [winterLength, setWinterLength] = useState(90);
+const [springLength, setSpringLength] = useState(92);
+const [summerLength, setSummerLength] = useState(92);
+const [fallLength, setFallLength] = useState(91);
+
+// === SEASON PROFILES ===
+/*
+  Climate characteristics for each season.
+  
+  mean: Target average temperature (°F) - currently not directly used,
+        kept for future enhancements or manual reference
+  amp: Amplitude of intra-seasonal variation (°F)
+      - Controls temperature "wiggle" within each season
+      - Higher amp = more variation mid-season
+      - Applied as: amp × sin(seasonProgress × π) × 0.3
+*/
+const [winterMean, setWinterMean] = useState(15);
+const [winterAmp, setWinterAmp] = useState(10);
+const [springMean, setSpringMean] = useState(65);
+const [springAmp, setSpringAmp] = useState(12);
+const [summerMean, setSummerMean] = useState(90);
+const [summerAmp, setSummerAmp] = useState(10);
+const [fallMean, setFallMean] = useState(55);
+const [fallAmp, setFallAmp] = useState(12);
+
+// === CROP CONFIG ===
+/*
+  Parameters for the food production bell curve (Gaussian distribution).
+  These work together to define crop temperature sensitivity.
+*/
+
+/*
+  Optimal growing temperature (°F).
+  Peak of the bell curve - where maxGrowth is achieved.
+  Changing this shifts the entire curve left/right.
+*/
+const [optimalTemp, setOptimalTemp] = useState(65);
+
+/*
+  Temperature tolerance (standard deviation).
+  Controls width of the bell curve.
+  Higher = more forgiving crop (grows well across wider temp range)
+  Lower = sensitive crop (only grows well near optimal temp)
+*/
+const [tolerance, setTolerance] = useState(18);
+
+/*
+  Maximum food growth per day (units).
+  Achieved at optimal temperature.
+  Total growth = minGrowth + maxGrowth (at peak)
+*/
+const [maxGrowth, setMaxGrowth] = useState(10);
+
+/*
+  Minimum food growth per day (units).
+  Safety floor - even at extreme temperatures, this much food is produced.
+  Prevents complete crop failure and starvation deadlocks.
+*/
+const [minGrowth, setMinGrowth] = useState(0.2);
+
+// === FOOD ECONOMY ===
+/*
+  Daily food consumption rate (units/day).
+  Currently constant. In full simulation: multiply by population.
+  Subtracted from food stock at midday (the "consumption" phase).
+*/
+const [dailyConsumption, setDailyConsumption] = useState(5);
+
+/*
+  Initial food stockpile (units).
+  Starting buffer before simulation begins.
+  Should be enough to survive early poor-growth periods.
+*/
+const [startingFood, setStartingFood] = useState(100);
+
+// === STARTING SEASON ===
+/*
+  Which season the simulation begins in.
+  Shifts the entire seasonal calendar by offsetting dayOfYear calculations.
+  Options: 'Winter', 'Spring', 'Summer', 'Fall'
+*/
+const [startingSeason, setStartingSeason] = useState('Spring');
+
+// Track which settings sections are expanded
+const [expandedSections, setExpandedSections] = useState({
+  time: true,      // Start with time section open
+  seasons: false,
+  profiles: false,
+  crop: false,
+  food: false
+});
+
+/*
+  Generate both temperature and food simulations
+  whenever the seed changes.
+*/
+
   useEffect(() => {
+  // Calculate total days from activeConfig
+  const totalDays = 365 * activeConfig.yearCount;
+  
+  // Build seasons array from activeConfig
+  const seasons = [
+    { name: 'Winter', length: activeConfig.winterLength },
+    { name: 'Spring', length: activeConfig.springLength },
+    { name: 'Summer', length: activeConfig.summerLength },
+    { name: 'Fall', length: activeConfig.fallLength }
+  ];
+  
+  // Build season profiles from activeConfig
+  const seasonProfiles = {
+    Winter: { mean: activeConfig.winterMean, amp: activeConfig.winterAmp },
+    Spring: { mean: activeConfig.springMean, amp: activeConfig.springAmp },
+    Summer: { mean: activeConfig.summerMean, amp: activeConfig.summerAmp },
+    Fall: { mean: activeConfig.fallMean, amp: activeConfig.fallAmp }
+  };
+  
+  // Build crop config from activeConfig
+  const cropConfig = {
+    optimalTemp: activeConfig.optimalTemp,
+    tolerance: activeConfig.tolerance,
+    maxGrowth: activeConfig.maxGrowth,
+    minGrowth: activeConfig.minGrowth
+  };
+  
+  // Calculate season offset based on starting season
+  const seasonOffsetMap = {
+    'Winter': 0,
+    'Spring': activeConfig.winterLength,
+    'Summer': activeConfig.winterLength + activeConfig.springLength,
+    'Fall': activeConfig.winterLength + activeConfig.springLength + activeConfig.summerLength
+  };
+  const seasonOffset = seasonOffsetMap[activeConfig.startingSeason] || 0;
+
     const generated = [];
 
     /* ==============================
        TEMPERATURE SIMULATION
        ============================== */
-    for (let dayIndex = 0; dayIndex < TOTAL_DAYS; dayIndex++) {
-      const year = Math.floor(dayIndex / DAYS_PER_YEAR);
-      const dayOfYear = dayIndex % DAYS_PER_YEAR;
+    for (let dayIndex = 0; dayIndex < totalDays; dayIndex++) {
+      const year = Math.floor(dayIndex / 365);
+      const dayOfYear = dayIndex % 365;
 
-      const season = getSeasonForDay(dayOfYear);
+      const season = getSeasonForDay(dayOfYear, seasons);
 
       const base = seasonalBaseline(
         season.name,
         season.progress,
-        dayOfYear
+        dayOfYear,
+        seasonProfiles,
+        seasonOffset
       );
 
       // Weekly oscillation (weather fronts)
@@ -320,11 +431,11 @@ export default function TemperatureSimulation() {
        FOOD PRODUCTION SIMULATION
        ============================== */
     const foodSimulation = [];
-    let currentFood = STARTING_FOOD;
+    let currentFood = activeConfig.startingFood;
 
-    for (let dayIndex = 0; dayIndex < TOTAL_DAYS; dayIndex++) {
+    for (let dayIndex = 0; dayIndex < totalDays; dayIndex++) {
       const temp = generated[dayIndex].temperature;
-      const growth = calculateGrowth(temp);
+      const growth = calculateGrowth(temp, cropConfig);
 
       // --- MORNING: harvest completes ---
       currentFood += growth;
@@ -336,24 +447,40 @@ export default function TemperatureSimulation() {
       });
 
       // --- MIDDAY: population consumes ---
-      currentFood -= DAILY_CONSUMPTION;
+      currentFood -= activeConfig.dailyConsumption;
       if (currentFood < 0) currentFood = 0;
 
       foodSimulation.push({
         x: dayIndex + 0.5,
         food: Math.round(currentFood * 10) / 10,
         phase: 'consumption',
-        consumed: DAILY_CONSUMPTION
+        consumed: activeConfig.dailyConsumption
       });
     }
 
     setFoodData(foodSimulation);
-  }, [seed]);
+  }, [seed, activeConfig]);
 
   /*
     Currently selected day's temperature data.
   */
   const current = data[currentDay] ?? {};
+
+  // Build seasons array from activeConfig for use in JSX
+  const seasons = [
+    { name: 'Winter', length: activeConfig.winterLength },
+    { name: 'Spring', length: activeConfig.springLength },
+    { name: 'Summer', length: activeConfig.summerLength },
+    { name: 'Fall', length: activeConfig.fallLength }
+  ];
+
+  // Build crop config for use in JSX
+  const cropConfig = {
+    optimalTemp: activeConfig.optimalTemp,
+    tolerance: activeConfig.tolerance,
+    maxGrowth: activeConfig.maxGrowth,
+    minGrowth: activeConfig.minGrowth
+  };
 
   /* ============================================================
      === UI & VISUALIZATION ===================================
@@ -361,6 +488,541 @@ export default function TemperatureSimulation() {
 
   return (
     <div style={{ padding: 20, fontFamily: 'Arial, sans-serif' }}>
+
+{/* === SETTINGS SIDE PANEL === */}
+    <div style={{
+      position: 'fixed',
+      top: 0,
+      right: showSettings ? 0 : -450,  // Slides in/out
+      width: 400,
+      height: '100vh',
+      backgroundColor: 'white',
+      boxShadow: '-2px 0 10px rgba(0,0,0,0.3)',
+      transition: 'right 0.3s ease',
+      overflowY: 'auto',
+      zIndex: 1000,
+      padding: 20
+    }}>
+      <h2>Settings</h2>
+
+{/* Close button */}
+<button
+  onClick={() => setShowSettings(false)}
+  style={{
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    padding: '5px 10px',
+    cursor: 'pointer',
+    backgroundColor: '#e74c3c',
+    color: 'white',
+    border: 'none',
+    borderRadius: '4px'
+  }}
+>
+  ✕
+</button>
+
+
+<button
+  onClick={() => {
+    setActiveConfig({...workingConfig});
+    setSeed(Math.random()); // Regenerate with new config
+    setShowSettings(false); // Close panel
+  }}
+  style={{
+    width: '100%',
+    padding: '12px',
+    marginBottom: '20px',
+    backgroundColor: '#27ae60',
+    color: 'white',
+    border: 'none',
+    borderRadius: '6px',
+    cursor: 'pointer',
+    fontWeight: 'bold',
+    fontSize: '16px'
+  }}
+>
+  💾 Save Changes & Regenerate
+</button>
+
+
+{/* === TIME SETTINGS SECTION === */}
+<div style={{ marginBottom: 20, borderBottom: '1px solid #ddd', paddingBottom: 10 }}>
+  <div 
+    onClick={() => setExpandedSections({
+  time: false,
+  seasons: false,
+  profiles: false,
+  crop: false,
+  food: false,
+  time: !expandedSections.time  // Only this one toggles
+})}
+    style={{ 
+      cursor: 'pointer', 
+      fontWeight: 'bold',
+      fontSize: '16px',
+      padding: '10px 0',
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center'
+    }}
+  >
+    <span>Time Settings</span>
+    <span>{expandedSections.time ? '▼' : '▶'}</span>
+  </div>
+  
+  {expandedSections.time && (
+    <div style={{ paddingLeft: 10 }}>
+      <label style={{ display: 'block', marginBottom: 10 }}>
+        <strong>Year Count:</strong>
+        <input 
+          type="number"
+          min="1"
+          max="10"
+          value={workingConfig.yearCount}
+          onChange={(e) => setWorkingConfig({...workingConfig, yearCount: Number(e.target.value)})}
+          style={{
+            marginLeft: 10,
+            padding: 5,
+            width: 80
+          }}
+        />
+      </label>
+      <p style={{ fontSize: 12, color: '#666', margin: 0 }}>
+        Total days: {365 * yearCount}
+      </p>
+      <label style={{ display: 'block', marginTop: 15 }}>
+        <strong>Starting Season:</strong>
+        <select
+          value={workingConfig.startingSeason}
+          onChange={(e) => {
+            setWorkingConfig({...workingConfig, startingSeason: e.target.value});
+          }}
+          style={{
+            marginLeft: 10,
+            padding: 5,
+            width: 120
+          }}
+        >
+          <option value="Winter">❄️ Winter</option>
+          <option value="Spring">🌸 Spring</option>
+          <option value="Summer">☀️ Summer</option>
+          <option value="Fall">🍂 Fall</option>
+        </select>
+      </label>
+    </div>
+  )}
+</div>
+
+{/* === SEASON LENGTHS SECTION === */}
+<div style={{ marginBottom: 20, borderBottom: '1px solid #ddd', paddingBottom: 10 }}>
+  <div 
+    onClick={() => setExpandedSections({
+  time: false,
+  seasons: false,
+  profiles: false,
+  crop: false,
+  food: false,
+  seasons: !expandedSections.seasons  // Only this one toggles
+})}
+    style={{ 
+      cursor: 'pointer', 
+      fontWeight: 'bold',
+      fontSize: '16px',
+      padding: '10px 0',
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center'
+    }}
+  >
+    <span>Season Lengths</span>
+    <span>{expandedSections.seasons ? '▼' : '▶'}</span>
+  </div>
+  
+  {expandedSections.seasons && (
+    <div style={{ paddingLeft: 10 }}>
+      <label style={{ display: 'block', marginBottom: 10 }}>
+        <strong>Winter (days):</strong>
+        <input 
+          type="number"
+          min="1"
+          max="365"
+          value={workingConfig.winterLength}
+          onChange={(e) => setWorkingConfig({...workingConfig, winterLength: Number(e.target.value)})}
+          style={{ marginLeft: 10, padding: 5, width: 80 }}
+        />
+      </label>
+      
+      <label style={{ display: 'block', marginBottom: 10 }}>
+        <strong>Spring (days):</strong>
+        <input 
+          type="number"
+          min="1"
+          max="365"
+          value={workingConfig.springLength}
+          onChange={(e) => setWorkingConfig({...workingConfig, springLength: Number(e.target.value)})}
+          style={{ marginLeft: 10, padding: 5, width: 80 }}
+        />
+      </label>
+      
+      <label style={{ display: 'block', marginBottom: 10 }}>
+        <strong>Summer (days):</strong>
+        <input 
+          type="number"
+          min="1"
+          max="365"
+          value={workingConfig.summerLength}
+          onChange={(e) => setWorkingConfig({...workingConfig, summerLength: Number(e.target.value)})}
+          style={{ marginLeft: 10, padding: 5, width: 80 }}
+        />
+      </label>
+      
+      <label style={{ display: 'block', marginBottom: 10 }}>
+        <strong>Fall (days):</strong>
+        <input 
+          type="number"
+          min="1"
+          max="365"
+          value={workingConfig.fallLength}
+          onChange={(e) => setWorkingConfig({...workingConfig, fallLength: Number(e.target.value)})}
+          style={{ marginLeft: 10, padding: 5, width: 80 }}
+        />
+      </label>
+      
+      {/* Validation warning */}
+      <p style={{ 
+        fontSize: 12, 
+        color: workingConfig.winterLength + workingConfig.springLength + workingConfig.summerLength + workingConfig.fallLength === 365 ? '#27ae60' : '#e74c3c',
+        margin: 0,
+        fontWeight: 'bold'
+      }}>
+        Total: {workingConfig.winterLength + workingConfig.springLength + workingConfig.summerLength + workingConfig.fallLength} days
+        {workingConfig.winterLength + workingConfig.springLength + workingConfig.summerLength + workingConfig.fallLength !== 365 && ' ⚠️ Must equal 365!'}
+      </p>
+    </div>
+  )}
+</div>
+
+{/* === SEASON PROFILES SECTION === */}
+<div style={{ marginBottom: 20, borderBottom: '1px solid #ddd', paddingBottom: 10 }}>
+  <div 
+    onClick={() => setExpandedSections({
+      time: false,
+      seasons: false,
+      profiles: false,
+      crop: false,
+      food: false,
+      profiles: !expandedSections.profiles
+    })}
+    style={{ 
+      cursor: 'pointer', 
+      fontWeight: 'bold',
+      fontSize: '16px',
+      padding: '10px 0',
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center'
+    }}
+  >
+    <span>Season Profiles</span>
+    <span>{expandedSections.profiles ? '▼' : '▶'}</span>
+  </div>
+  
+  {expandedSections.profiles && (
+    <div style={{ paddingLeft: 10 }}>
+      <p style={{ fontSize: 12, color: '#666', marginTop: 0 }}>
+        Controls temperature variation within each season
+      </p>
+      
+      {/* Winter */}
+      <div style={{ marginBottom: 15, padding: 10, backgroundColor: '#f9f9f9', borderRadius: 5 }}>
+        <strong style={{ display: 'block', marginBottom: 5 }}>❄️ Winter</strong>
+        <label style={{ display: 'block', marginBottom: 5, fontSize: 14 }}>
+          Mean Temp (°F):
+          <input 
+            type="number"
+            value={workingConfig.winterMean}
+            onChange={(e) => setWorkingConfig({...workingConfig, winterMean: Number(e.target.value)})}
+            style={{ marginLeft: 10, padding: 3, width: 60 }}
+          />
+        </label>
+        <label style={{ display: 'block', fontSize: 14 }}>
+          Amplitude:
+          <input 
+            type="number"
+            min="0"
+            max="30"
+            value={workingConfig.winterAmp}
+            onChange={(e) => setWorkingConfig({...workingConfig, winterAmp: Number(e.target.value)})}
+            style={{ marginLeft: 10, padding: 3, width: 60 }}
+          />
+        </label>
+      </div>
+      
+      {/* Spring */}
+      <div style={{ marginBottom: 15, padding: 10, backgroundColor: '#f9f9f9', borderRadius: 5 }}>
+        <strong style={{ display: 'block', marginBottom: 5 }}>🌸 Spring</strong>
+        <label style={{ display: 'block', marginBottom: 5, fontSize: 14 }}>
+          Mean Temp (°F):
+          <input 
+            type="number"
+            value={workingConfig.springMean}
+            onChange={(e) => setWorkingConfig({...workingConfig, springMean: Number(e.target.value)})}
+            style={{ marginLeft: 10, padding: 3, width: 60 }}
+          />
+        </label>
+        <label style={{ display: 'block', fontSize: 14 }}>
+          Amplitude:
+          <input 
+            type="number"
+            min="0"
+            max="30"
+            value={workingConfig.springAmp}
+            onChange={(e) => setWorkingConfig({...workingConfig, springAmp: Number(e.target.value)})}
+            style={{ marginLeft: 10, padding: 3, width: 60 }}
+          />
+        </label>
+      </div>
+      
+      {/* Summer */}
+      <div style={{ marginBottom: 15, padding: 10, backgroundColor: '#f9f9f9', borderRadius: 5 }}>
+        <strong style={{ display: 'block', marginBottom: 5 }}>☀️ Summer</strong>
+        <label style={{ display: 'block', marginBottom: 5, fontSize: 14 }}>
+          Mean Temp (°F):
+          <input 
+            type="number"
+            value={workingConfig.summerMean}
+            onChange={(e) => setWorkingConfig({...workingConfig, summerMean: Number(e.target.value)})}
+            style={{ marginLeft: 10, padding: 3, width: 60 }}
+          />
+        </label>
+        <label style={{ display: 'block', fontSize: 14 }}>
+          Amplitude:
+          <input 
+            type="number"
+            min="0"
+            max="30"
+            value={workingConfig.summerAmp}
+            onChange={(e) => setWorkingConfig({...workingConfig, summerAmp: Number(e.target.value)})}
+            style={{ marginLeft: 10, padding: 3, width: 60 }}
+          />
+        </label>
+      </div>
+      
+      {/* Fall */}
+      <div style={{ marginBottom: 15, padding: 10, backgroundColor: '#f9f9f9', borderRadius: 5 }}>
+        <strong style={{ display: 'block', marginBottom: 5 }}>🍂 Fall</strong>
+        <label style={{ display: 'block', marginBottom: 5, fontSize: 14 }}>
+          Mean Temp (°F):
+          <input 
+            type="number"
+            value={workingConfig.fallMean}
+            onChange={(e) => setWorkingConfig({...workingConfig, fallMean: Number(e.target.value)})}
+            style={{ marginLeft: 10, padding: 3, width: 60 }}
+          />
+        </label>
+        <label style={{ display: 'block', fontSize: 14 }}>
+          Amplitude:
+          <input 
+            type="number"
+            min="0"
+            max="30"
+            value={workingConfig.fallAmp}
+            onChange={(e) => setWorkingConfig({...workingConfig, fallAmp: Number(e.target.value)})}
+            style={{ marginLeft: 10, padding: 3, width: 60 }}
+          />
+        </label>
+      </div>
+      
+      <p style={{ fontSize: 11, color: '#999', fontStyle: 'italic' }}>
+        Note: Mean values are reference only. Amplitude controls mid-season variation.
+      </p>
+    </div>
+  )}
+</div>
+
+{/* === CROP CONFIG SECTION === */}
+<div style={{ marginBottom: 20, borderBottom: '1px solid #ddd', paddingBottom: 10 }}>
+  <div 
+    onClick={() => setExpandedSections({
+      time: false,
+      seasons: false,
+      profiles: false,
+      crop: false,
+      food: false,
+      crop: !expandedSections.crop
+    })}
+    style={{ 
+      cursor: 'pointer', 
+      fontWeight: 'bold',
+      fontSize: '16px',
+      padding: '10px 0',
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center'
+    }}
+  >
+    <span>🌾 Crop Configuration</span>
+    <span>{expandedSections.crop ? '▼' : '▶'}</span>
+  </div>
+  
+  {expandedSections.crop && (
+    <div style={{ paddingLeft: 10 }}>
+      <p style={{ fontSize: 12, color: '#666', marginTop: 0 }}>
+        Bell curve parameters for temperature-based growth
+      </p>
+      
+      <label style={{ display: 'block', marginBottom: 10 }}>
+        <strong>Optimal Temperature (°F):</strong>
+        <input 
+          type="number"
+          min="-10"
+          max="110"
+          value={workingConfig.optimalTemp}
+          onChange={(e) => setWorkingConfig({...workingConfig, optimalTemp: Number(e.target.value)})}
+          style={{ marginLeft: 10, padding: 5, width: 80 }}
+        />
+      </label>
+      <p style={{ fontSize: 11, color: '#666', margin: '0 0 15px 0' }}>
+        Peak of the growth curve - where crops thrive best
+      </p>
+      
+      <label style={{ display: 'block', marginBottom: 10 }}>
+        <strong>Tolerance (°F):</strong>
+        <input 
+          type="number"
+          min="1"
+          max="50"
+          step="0.5"
+          value={workingConfig.tolerance}
+          onChange={(e) => setWorkingConfig({...workingConfig, tolerance: Number(e.target.value)})}
+          style={{ marginLeft: 10, padding: 5, width: 80 }}
+        />
+      </label>
+      <p style={{ fontSize: 11, color: '#666', margin: '0 0 15px 0' }}>
+        How forgiving the crop is (higher = wider growing range)
+      </p>
+      
+      <label style={{ display: 'block', marginBottom: 10 }}>
+        <strong>Max Growth (units/day):</strong>
+        <input 
+          type="number"
+          min="0.1"
+          max="50"
+          step="0.1"
+          value={workingConfig.maxGrowth}
+          onChange={(e) => setWorkingConfig({...workingConfig, maxGrowth: Number(e.target.value)})}
+          style={{ marginLeft: 10, padding: 5, width: 80 }}
+        />
+      </label>
+      <p style={{ fontSize: 11, color: '#666', margin: '0 0 15px 0' }}>
+        Maximum yield at optimal temperature
+      </p>
+      
+      <label style={{ display: 'block', marginBottom: 10 }}>
+        <strong>Min Growth (units/day):</strong>
+        <input 
+          type="number"
+          min="0"
+          max="5"
+          step="0.1"
+          value={workingConfig.minGrowth}
+          onChange={(e) => setWorkingConfig({...workingConfig, minGrowth: Number(e.target.value)})}
+          style={{ marginLeft: 10, padding: 5, width: 80 }}
+        />
+      </label>
+      <p style={{ fontSize: 11, color: '#666', margin: '0 0 0 0' }}>
+        Safety floor - prevents complete crop failure
+      </p>
+    </div>
+  )}
+</div>
+      
+{/* === FOOD ECONOMY SECTION === */}
+<div style={{ marginBottom: 20, borderBottom: '1px solid #ddd', paddingBottom: 10 }}>
+  <div 
+    onClick={() => setExpandedSections({
+      time: false,
+      seasons: false,
+      profiles: false,
+      crop: false,
+      food: false,
+      food: !expandedSections.food
+    })}
+    style={{ 
+      cursor: 'pointer', 
+      fontWeight: 'bold',
+      fontSize: '16px',
+      padding: '10px 0',
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center'
+    }}
+  >
+    <span>🍞 Food Economy</span>
+    <span>{expandedSections.food ? '▼' : '▶'}</span>
+  </div>
+  
+  {expandedSections.food && (
+    <div style={{ paddingLeft: 10 }}>
+      <p style={{ fontSize: 12, color: '#666', marginTop: 0 }}>
+        Starting conditions and consumption rates
+      </p>
+      
+      <label style={{ display: 'block', marginBottom: 10 }}>
+        <strong>Starting Food (units):</strong>
+        <input 
+          type="number"
+          min="0"
+          max="10000"
+          step="10"
+          value={workingConfig.startingFood}
+          onChange={(e) => setWorkingConfig({...workingConfig, startingFood: Number(e.target.value)})}
+          style={{ marginLeft: 10, padding: 5, width: 80 }}
+        />
+      </label>
+      <p style={{ fontSize: 11, color: '#666', margin: '0 0 15px 0' }}>
+        Initial stockpile buffer
+      </p>
+      
+      <label style={{ display: 'block', marginBottom: 10 }}>
+        <strong>Daily Consumption (units/day):</strong>
+        <input 
+          type="number"
+          min="0.1"
+          max="100"
+          step="0.5"
+          value={workingConfig.dailyConsumption}
+          onChange={(e) => setWorkingConfig({...workingConfig, dailyConsumption: Number(e.target.value)})}
+          style={{ marginLeft: 10, padding: 5, width: 80 }}
+        />
+      </label>
+      <p style={{ fontSize: 11, color: '#666', margin: '0 0 0 0' }}>
+        How much food is consumed each day
+      </p>
+    </div>
+  )}
+</div>
+
+    </div>
+    
+    {/* Overlay when settings open */}
+    {showSettings && (
+      <div 
+        onClick={() => setShowSettings(false)}
+        style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0,0,0,0.5)',
+          zIndex: 999
+        }}
+      />
+    )}
+
       <h1>Multi-Year Temperature & Food Simulation</h1>
 
       {/* === CURRENT DAY READOUT === */}
@@ -370,22 +1032,50 @@ export default function TemperatureSimulation() {
         <strong>Season:</strong> {current.season ?? '-'}<br />
         <strong>Temperature:</strong> {current.temperature ?? '-'} °F<br />
         <strong>Food Stock:</strong> {foodData[currentDay * 2]?.food ?? '-'} units<br />
-        <strong>Consumption Rate:</strong> {DAILY_CONSUMPTION} units/day<br />
+        <strong>Consumption Rate:</strong> {activeConfig.dailyConsumption} units/day<br />
         <strong>Daily Growth:</strong>{' '}
         {current.temperature
-          ? calculateGrowth(current.temperature).toFixed(1)
+          ? calculateGrowth(current.temperature, cropConfig).toFixed(1)
           : '-'} units/day
       </div>
 
       {/* === REGENERATE BUTTON === */}
       <button
-        onClick={() => {
-          setSeed(Math.random());
-          setCurrentDay(0);
-        }}
-      >
-        Generate New Climate
-      </button>
+  onClick={() => {
+    setSeed(Math.random());
+    setCurrentDay(0);
+  }}
+  style={{
+    padding: '10px 16px',
+    fontSize: '16px',
+    marginBottom: '10px',
+    backgroundColor: '#4ecdc4',
+    color: 'white',
+    border: 'none',
+    borderRadius: '6px',
+    cursor: 'pointer'
+  }}
+>
+  Generate New Temperature Pattern
+</button>
+
+{/* ADD THIS BUTTON: */}
+<button
+  onClick={() => setShowSettings(!showSettings)}
+  style={{
+    padding: '10px 16px',
+    fontSize: '16px',
+    marginBottom: '10px',
+    marginLeft: '10px',
+    backgroundColor: '#9b59b6',
+    color: 'white',
+    border: 'none',
+    borderRadius: '6px',
+    cursor: 'pointer'
+  }}
+>
+  ⚙️ Settings
+</button>
 
       {/* === SCRUBBER === */}
       <label style={{ display: 'block' }}>
@@ -393,7 +1083,7 @@ export default function TemperatureSimulation() {
         <input
           type="range"
           min={0}
-          max={TOTAL_DAYS - 1}
+          max={365 * activeConfig.yearCount - 1}
           value={currentDay}
           onChange={(e) => setCurrentDay(Number(e.target.value))}
           style={{ width: '100%' }}
@@ -417,7 +1107,7 @@ export default function TemperatureSimulation() {
       <XAxis
         dataKey="dayIndex"
         type="number"
-        domain={[0, TOTAL_DAYS]}
+        domain={[0, 365 * activeConfig.yearCount]}
         label={{ value: 'Day', position: 'insideBottom', offset: -5 }}
       />
 
@@ -432,26 +1122,36 @@ export default function TemperatureSimulation() {
         wrapperStyle={{ paddingTop: 10 }}
       />
 
-      {/* === Seasonal background shading === */}
-      {Array.from({ length: YEAR_COUNT }).map((_, year) => {
-        let seasonStart = year * DAYS_PER_YEAR;
+{/* === Seasonal background shading === */}
+{Array.from({ length: activeConfig.yearCount }).map((_, year) => {
+  // Start from the chosen starting season
+  let dayCounter = year * 365;
+  
+  // Find which season to start with
+  const startIndex = seasons.findIndex(s => s.name === activeConfig.startingSeason);
+  
+  // Reorder seasons to start from the selected one
+  const orderedSeasons = [
+    ...seasons.slice(startIndex),
+    ...seasons.slice(0, startIndex)
+  ];
 
-        return SEASONS.map(season => {
-          const x1 = seasonStart;
-          const x2 = seasonStart + season.length;
-          seasonStart = x2;
+  return orderedSeasons.map(season => {
+    const x1 = dayCounter;
+    const x2 = dayCounter + season.length;
+    dayCounter = x2;
 
-          return (
-            <ReferenceArea
-              key={`${year}-${season.name}`}
-              x1={x1}
-              x2={x2}
-              fill={SEASON_COLORS[season.name]}
-              strokeOpacity={0}
-            />
-          );
-        });
-      })}
+    return (
+      <ReferenceArea
+        key={`${year}-${season.name}-${x1}`}
+        x1={x1}
+        x2={x2}
+        fill={SEASON_COLORS[season.name]}
+        strokeOpacity={0}
+      />
+    );
+  });
+})}
 
       {/* Show current day as a vertical line */}
       {currentDay >= 0 && (
@@ -493,8 +1193,7 @@ export default function TemperatureSimulation() {
       <XAxis
         dataKey="x"
         type="number"
-        domain={[0, TOTAL_DAYS]}
-        label={{ value: 'Day', position: 'insideBottom', offset: -5 }}
+        domain={[0, 365 * yearCount]}        label={{ value: 'Day', position: 'insideBottom', offset: -5 }}
       />
 
       <YAxis
@@ -530,26 +1229,36 @@ export default function TemperatureSimulation() {
         wrapperStyle={{ paddingTop: 10 }}
       />
 
-      {/* === Seasonal background shading (same as temp chart) === */}
-      {Array.from({ length: YEAR_COUNT }).map((_, year) => {
-        let seasonStart = year * DAYS_PER_YEAR;
+{/* === Seasonal background shading === */}
+{Array.from({ length: activeConfig.yearCount }).map((_, year) => {
+  // Start from the chosen starting season
+  let dayCounter = year * 365;
+  
+  // Find which season to start with
+  const startIndex = seasons.findIndex(s => s.name === activeConfig.startingSeason);
+  
+  // Reorder seasons to start from the selected one
+  const orderedSeasons = [
+    ...seasons.slice(startIndex),
+    ...seasons.slice(0, startIndex)
+  ];
 
-        return SEASONS.map(season => {
-          const x1 = seasonStart;
-          const x2 = seasonStart + season.length;
-          seasonStart = x2;
+  return orderedSeasons.map(season => {
+    const x1 = dayCounter;
+    const x2 = dayCounter + season.length;
+    dayCounter = x2;
 
-          return (
-            <ReferenceArea
-              key={`food-${year}-${season.name}`}
-              x1={x1}
-              x2={x2}
-              fill={SEASON_COLORS[season.name]}
-              strokeOpacity={0}
-            />
-          );
-        });
-      })}
+    return (
+      <ReferenceArea
+        key={`${year}-${season.name}-${x1}`}
+        x1={x1}
+        x2={x2}
+        fill={SEASON_COLORS[season.name]}
+        strokeOpacity={0}
+      />
+    );
+  });
+})}
 
       {/* Show current day as a vertical line */}
       {currentDay >= 0 && (
@@ -584,7 +1293,7 @@ export default function TemperatureSimulation() {
   <h3>Crop Growth Rate by Temperature</h3>
   <p style={{ fontSize: 14, color: '#666' }}>
     This shows how much food is produced per day at different temperatures.
-    The curve is centered on the optimal temperature ({CROP_CONFIG.optimalTemp}°F).
+    The curve is centered on the optimal temperature ({optimalTemp}°F).
   </p>
   
   <LineChart 
@@ -596,7 +1305,7 @@ export default function TemperatureSimulation() {
       for (let temp = -10; temp <= 110; temp += 1) {
         curveData.push({
           temperature: temp,
-          growth: calculateGrowth(temp)
+          growth: calculateGrowth(temp, cropConfig)
         });
       }
       return curveData;
@@ -614,7 +1323,7 @@ export default function TemperatureSimulation() {
     
     <YAxis
       label={{ value: 'Food Growth (units/day)', angle: -90, position: 'insideLeft' }}
-      domain={[0, CROP_CONFIG.maxGrowth + CROP_CONFIG.minGrowth + 1]}
+      domain={[0, cropConfig.maxGrowth + cropConfig.minGrowth + 1]}
     />
     
     <Tooltip 
@@ -645,12 +1354,12 @@ export default function TemperatureSimulation() {
     
     {/* Vertical line at optimal temperature */}
     <ReferenceLine 
-      x={CROP_CONFIG.optimalTemp} 
+      x={cropConfig.optimalTemp} 
       stroke="#2ecc71" 
       strokeWidth={2}
       strokeDasharray="5 5"
       label={{ 
-        value: `Optimal (${CROP_CONFIG.optimalTemp}°F)`, 
+        value: `Optimal (${cropConfig.optimalTemp}°F)`, 
         position: 'top',
         fill: '#2ecc71',
         fontSize: 12
@@ -659,7 +1368,7 @@ export default function TemperatureSimulation() {
     
     {/* Horizontal line at max growth */}
     <ReferenceLine 
-      y={CROP_CONFIG.maxGrowth + CROP_CONFIG.minGrowth} 
+      y={cropConfig.maxGrowth + cropConfig.minGrowth} 
       stroke="#3498db" 
       strokeWidth={1}
       strokeDasharray="3 3"
@@ -673,7 +1382,7 @@ export default function TemperatureSimulation() {
     
     {/* Horizontal line at min growth */}
     <ReferenceLine 
-      y={CROP_CONFIG.minGrowth} 
+      y={cropConfig.minGrowth} 
       stroke="#e74c3c" 
       strokeWidth={1}
       strokeDasharray="3 3"
