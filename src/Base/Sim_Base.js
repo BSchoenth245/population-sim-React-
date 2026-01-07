@@ -40,6 +40,104 @@ const SEASON_COLORS = {
   Fall:   'rgba(222, 174, 135, 0.25)'
 };
 
+// ADD THIS - Climate Presets
+const CLIMATE_PRESETS = {
+  temperate: {
+    name: 'Temperate',
+    description: 'Moderate four seasons with mild temperatures',
+    config: {
+      winterLength: 90,
+      springLength: 92,
+      summerLength: 92,
+      fallLength: 91,
+      winterMean: 35,
+      winterAmp: 8,
+      springMean: 55,
+      springAmp: 12,
+      summerMean: 75,
+      summerAmp: 10,
+      fallMean: 50,
+      fallAmp: 12,
+    }
+  },
+  
+  desert: {
+    name: 'Desert',
+    description: 'Hot days, cold nights, minimal rainfall simulation',
+    config: {
+      winterLength: 120,  // Long, mild winter
+      springLength: 60,   // Short spring
+      summerLength: 150,  // Very long, hot summer
+      fallLength: 35,     // Short fall
+      winterMean: 50,     // Mild winter days
+      winterAmp: 15,      // Large day/night swings
+      springMean: 70,
+      springAmp: 18,
+      summerMean: 95,     // Scorching summer
+      summerAmp: 20,      // Extreme day/night variation
+      fallMean: 65,
+      fallAmp: 15,
+    }
+  },
+  
+  tropical: {
+    name: 'Tropical',
+    description: 'Hot and humid year-round, minimal seasonal variation',
+    config: {
+      winterLength: 91,
+      springLength: 91,
+      summerLength: 92,
+      fallLength: 91,
+      winterMean: 75,     // Warm "winter"
+      winterAmp: 5,       // Very stable
+      springMean: 80,
+      springAmp: 5,
+      summerMean: 85,     // Hot but not extreme
+      summerAmp: 5,
+      fallMean: 78,
+      fallAmp: 5,
+    }
+  },
+  
+  arctic: {
+    name: 'Arctic',
+    description: 'Long, brutal winters with brief summer growing season',
+    config: {
+      winterLength: 240,  // 8 months of winter
+      springLength: 30,   // Short spring
+      summerLength: 60,   // Brief summer
+      fallLength: 35,     // Short fall
+      winterMean: -10,    // Freezing
+      winterAmp: 8,
+      springMean: 25,
+      springAmp: 10,
+      summerMean: 50,     // Cool summer
+      summerAmp: 12,
+      fallMean: 10,
+      fallAmp: 10,
+    }
+  },
+  
+  mediterranean: {
+    name: 'Mediterranean',
+    description: 'Hot dry summers, mild wet winters',
+    config: {
+      winterLength: 100,
+      springLength: 80,
+      summerLength: 120,
+      fallLength: 65,
+      winterMean: 45,     // Mild winter
+      winterAmp: 8,
+      springMean: 60,
+      springAmp: 10,
+      summerMean: 85,     // Hot, dry summer
+      summerAmp: 12,
+      fallMean: 65,
+      fallAmp: 10,
+    }
+  }
+};
+
 /* ============================================================
    === HELPER FUNCTIONS =======================================
    ============================================================ */
@@ -598,6 +696,44 @@ const [expandedSections, setExpandedSections] = useState({
 >
   💾 Save Changes & Regenerate
 </button>
+
+<div style={{ marginBottom: 20, padding: 15, backgroundColor: '#e8f5f9', borderRadius: 5 }}>
+  <label style={{ display: 'block', marginBottom: 10 }}>
+    <strong>🌍 Climate Preset:</strong>
+  </label>
+  <select
+    onChange={(e) => {
+      if (e.target.value) {
+        const preset = CLIMATE_PRESETS[e.target.value];
+        setWorkingConfig({
+          ...workingConfig,
+          ...preset.config,
+          yearCount: workingConfig.yearCount,      // Keep current year count
+          startingSeason: workingConfig.startingSeason  // Keep current starting season
+        });
+      }
+    }}
+    style={{
+      width: '100%',
+      padding: 8,
+      fontSize: 14,
+      borderRadius: 4,
+      border: '1px solid #ccc',
+      marginBottom: 10
+    }}
+  >
+    <option value="">-- Select a Preset --</option>
+    {Object.entries(CLIMATE_PRESETS).map(([key, preset]) => (
+      <option key={key} value={key}>
+        {preset.name}
+      </option>
+    ))}
+  </select>
+  
+  <p style={{ fontSize: 11, color: '#666', margin: 0, fontStyle: 'italic' }}>
+    Choose a preset to quickly configure climate settings. You can still customize after selecting.
+  </p>
+</div>
 
 
 {/* === TIME SETTINGS SECTION === */}
