@@ -14,7 +14,7 @@
    - Clear extension points for future systems
    ============================================================ */
 
-import { useEffect, useState } from 'react';
+import { act, useEffect, useState } from 'react';
 
 /*
   Recharts is used strictly for visualization.
@@ -84,41 +84,93 @@ function getSeasonForDay(dayOfYear, seasons) {
  * @param {number} dayOfYear - Day index within the year
  * @returns {number} Baseline temperature in °F
  */
-function seasonalBaseline(seasonName, progress, dayOfYear, seasonProfiles, seasonOffset = 0) {
-  // Phase shift so summer peaks correctly
-  const WAVE_SHIFT_DAYS = -45;
-
-  // Apply season offset to shift the temperature curve
-  const shiftedDay = (dayOfYear + 365 + seasonOffset) % 365;
-
-  const annualProgress =
-    (shiftedDay + WAVE_SHIFT_DAYS) / 365;
-
-  const annualMean = 52;
-  const annualAmplitude = 22;
-
-  // Primary annual sine wave
-  const annualWave =
-    annualMean +
-    annualAmplitude *
-      Math.sin(2 * Math.PI * (annualProgress - 0.25));
-
-  // Small seasonal offsets for asymmetry
-  const seasonOffsets = {
-    Winter: -5,
-    Spring: 0,
-    Summer: +5,
-    Fall:   0
-  };
-
-  // Gentle curvature within each season
-  const amp = seasonProfiles[seasonName]?.amp ?? 0;
-  const intraSeason =
-    amp *
-    Math.sin(progress * Math.PI) *
-    0.3;
-
-  return annualWave + seasonOffsets[seasonName] + intraSeason;
+function seasonalBaseline(seasonName, progress, dayOfYear, seasonProfiles, seasons, startingSeason) {
+  // Build ordered seasons starting from the starting season
+  const seasonNames = seasons.map(s => s.name);
+  const startIndex = seasonNames.indexOf(startingSeason);
+  const orderedSeasons = [
+    ...seasons.slice(startIndex),
+    ...seasons.slice(0, startIndex)
+  ];
+  
+  // Calculate season midpoints and their target temperatures
+  const seasonMidpoints = [];
+  let cumulativeDays = 0;
+  
+  for (let i = 0; i < orderedSeasons.length; i++) {
+    const season = orderedSeasons[i];
+    const midpoint = cumulativeDays + season.length / 2;
+    
+    seasonMidpoints.push({
+      name: season.name,
+      midpointDay: midpoint,
+      mean: seasonProfiles[season.name]?.mean ?? 50,
+      amp: seasonProfiles[season.name]?.amp ?? 0,
+      length: season.length
+    });
+    
+    cumulativeDays += season.length;
+  }
+  
+  // Find current position in the year
+  const currentDayInYear = dayOfYear % 365;
+  
+  // Find the two closest season midpoints to interpolate between
+  let prevMidpoint = seasonMidpoints[seasonMidpoints.length - 1];
+  let nextMidpoint = seasonMidpoints[0];
+  
+  for (let i = 0; i < seasonMidpoints.length; i++) {
+    const curr = seasonMidpoints[i];
+    const next = seasonMidpoints[(i + 1) % seasonMidpoints.length];
+    
+    // Check if current day falls between this midpoint and the next
+    if (i === seasonMidpoints.length - 1) {
+      // Handle wrap-around case (last season wrapping to first)
+      if (currentDayInYear >= curr.midpointDay || currentDayInYear < next.midpointDay) {
+        prevMidpoint = curr;
+        nextMidpoint = next;
+        break;
+      }
+    } else {
+      if (currentDayInYear >= curr.midpointDay && currentDayInYear < next.midpointDay) {
+        prevMidpoint = curr;
+        nextMidpoint = next;
+        break;
+      }
+    }
+  }
+  
+  // Calculate distance from previous midpoint
+  let distanceFromPrev;
+  let totalDistance;
+  
+  if (prevMidpoint.midpointDay > nextMidpoint.midpointDay) {
+    // Wrap-around case
+    if (currentDayInYear >= prevMidpoint.midpointDay) {
+      distanceFromPrev = currentDayInYear - prevMidpoint.midpointDay;
+    } else {
+      distanceFromPrev = (365 - prevMidpoint.midpointDay) + currentDayInYear;
+    }
+    totalDistance = (365 - prevMidpoint.midpointDay) + nextMidpoint.midpointDay;
+  } else {
+    distanceFromPrev = currentDayInYear - prevMidpoint.midpointDay;
+    totalDistance = nextMidpoint.midpointDay - prevMidpoint.midpointDay;
+  }
+  
+  // Progress between the two midpoints (0 to 1)
+  const progressBetweenMidpoints = distanceFromPrev / totalDistance;
+  
+  // Smooth cosine interpolation
+  const smoothProgress = (1 - Math.cos(progressBetweenMidpoints * Math.PI)) / 2;
+  const baseTemp = prevMidpoint.mean + (nextMidpoint.mean - prevMidpoint.mean) * smoothProgress;
+  
+  // Add intra-seasonal variation
+  // Use the season we're currently closer to
+  const currentSeasonMidpoint = progressBetweenMidpoints < 0.5 ? prevMidpoint : nextMidpoint;
+  const seasonProgress = progress; // Progress within current season (0-1)
+  const intraSeason = currentSeasonMidpoint.amp * Math.sin(seasonProgress * Math.PI) * 0.3;
+  
+  return baseTemp + intraSeason;
 }
 
 /**
@@ -398,7 +450,8 @@ const [expandedSections, setExpandedSections] = useState({
         season.progress,
         dayOfYear,
         seasonProfiles,
-        seasonOffset
+        seasons,
+        activeConfig.startingSeason  // Add starting season parameter
       );
 
       // Weekly oscillation (weather fronts)
@@ -1193,7 +1246,8 @@ const [expandedSections, setExpandedSections] = useState({
       <XAxis
         dataKey="x"
         type="number"
-        domain={[0, 365 * yearCount]}        label={{ value: 'Day', position: 'insideBottom', offset: -5 }}
+        domain={[0, 365 * activeConfig.yearCount]}
+        label={{ value: 'Day', position: 'insideBottom', offset: -5 }}
       />
 
       <YAxis
@@ -1293,7 +1347,7 @@ const [expandedSections, setExpandedSections] = useState({
   <h3>Crop Growth Rate by Temperature</h3>
   <p style={{ fontSize: 14, color: '#666' }}>
     This shows how much food is produced per day at different temperatures.
-    The curve is centered on the optimal temperature ({optimalTemp}°F).
+    The curve is centered on the optimal temperature ({activeConfig.optimalTemp}°F).
   </p>
   
   <LineChart 
