@@ -138,6 +138,118 @@ const CLIMATE_PRESETS = {
   }
 };
 
+const CROP_PRESETS = {
+  wheat: {
+    name: "Wheat",
+    description: "A staple crop that grows well in temperate climates",
+    config: {
+      optimalTemp: 64,
+      tolerance: 13,
+      minGrowth: 0.5,
+      maxGrowth: 6
+    }
+  },
+  
+  soybeans: {
+      name: "Soybeans",
+      description: "A versatile crop suited for warm climates",
+      config: {
+        optimalTemp: 77,
+        tolerance: 11,
+        minGrowth: 0.5,
+        maxGrowth: 5
+      }
+    },
+
+  rice: {
+      name: "Rice",
+      description: "A tropical grain requiring high temperatures",
+      config: {
+        optimalTemp: 82,
+        tolerance: 9,
+        minGrowth: 1,
+        maxGrowth: 8
+      }
+    },
+
+  potatoes: {
+      name: "Potatoes",
+      description: "A hardy root vegetable for temperate regions",
+      config: {
+        optimalTemp: 63,
+        tolerance: 7,
+        minGrowth: 0.7,
+        maxGrowth: 7
+      }
+    },
+
+  carrots: {
+      name: "Carrots",
+      description: "A cool-weather root crop",
+      config: {
+        optimalTemp: 61,
+        tolerance: 7,
+        minGrowth: 0.5,
+        maxGrowth: 5
+      }
+    },
+
+  sugarCane: {
+      name: "Sugar Cane",
+      description: "A tropical grass requiring high heat",
+      config: {
+        optimalTemp: 86,
+        tolerance: 11,
+        minGrowth: 1.5,
+        maxGrowth: 12
+      }
+    },
+
+  pineapple: {
+      name: "Pineapple",
+      description: "A tropical fruit with moderate yields",
+      config: {
+        optimalTemp: 79,
+        tolerance: 9,
+        minGrowth: 0.3,
+        maxGrowth: 4
+      }
+    },
+
+  barley: {
+      name: "Barley",
+      description: "A temperate grain similar to wheat",
+      config: {
+        optimalTemp: 63,
+        tolerance: 11,
+        minGrowth: 0.5,
+        maxGrowth: 5
+      }
+    },
+
+  bananas: {
+      name: "Bananas",
+      description: "A tropical fruit requiring consistent heat",
+      config: {
+        optimalTemp: 84,
+        tolerance: 7,
+        minGrowth: 1,
+        maxGrowth: 10
+      }
+    },
+
+  cotton: {
+    name: "Cotton",
+    description: "A warm-weather fiber crop",
+    config: {
+      optimalTemp: 81,
+      tolerance: 11,
+      minGrowth: 0.4,
+      maxGrowth: 6
+    }
+  }  
+}
+
 /* ============================================================
    === HELPER FUNCTIONS =======================================
    ============================================================ */
@@ -633,6 +745,35 @@ const [expandedSections, setExpandedSections] = useState({
     minGrowth: activeConfig.minGrowth
   };
 
+
+  // Calculate the actual current season accounting for starting season
+const getCurrentSeasonName = () => {
+  if (!current.dayOfYear && current.dayOfYear !== 0) return '-';
+  
+  const dayOfYear = current.dayOfYear % 365;
+  
+  // Build ordered seasons starting from starting season
+  const seasonNames = seasons.map(s => s.name);
+  const startIndex = seasonNames.indexOf(activeConfig.startingSeason);
+  const orderedSeasons = [
+    ...seasons.slice(startIndex),
+    ...seasons.slice(0, startIndex)
+  ];
+  
+  // Find which season this day falls into
+  let accumulated = 0;
+  for (const season of orderedSeasons) {
+    if (dayOfYear < accumulated + season.length) {
+      return season.name;
+    }
+    accumulated += season.length;
+  }
+  
+  return orderedSeasons[0].name; // Fallback
+};
+const actualCurrentSeason = getCurrentSeasonName();
+
+
   /* ============================================================
      === UI & VISUALIZATION ===================================
      ============================================================ */
@@ -735,6 +876,43 @@ const [expandedSections, setExpandedSections] = useState({
   </p>
 </div>
 
+<div style={{ marginBottom: 20, padding: 15, backgroundColor: '#e8f5f9', borderRadius: 5 }}>
+  <label style={{ display: 'block', marginBottom: 10 }}>
+    <strong>🌾 Crop Preset:</strong>
+  </label>
+  <select
+    onChange={(e) => {
+      if (e.target.value) {
+        const preset = CROP_PRESETS[e.target.value];
+        setWorkingConfig({
+          ...workingConfig,
+          ...preset.config,
+          yearCount: workingConfig.yearCount,      // Keep current year count
+          startingSeason: workingConfig.startingSeason  // Keep current starting season
+        });
+      }
+    }}
+    style={{
+      width: '100%',
+      padding: 8,
+      fontSize: 14,
+      borderRadius: 4,
+      border: '1px solid #ccc',
+      marginBottom: 10
+    }}
+  >
+    <option value="">-- Select a Preset --</option>
+    {Object.entries(CROP_PRESETS).map(([key, preset]) => (
+      <option key={key} value={key}>
+        {preset.name}
+      </option>
+    ))}
+  </select>
+  
+  <p style={{ fontSize: 11, color: '#666', margin: 0, fontStyle: 'italic' }}>
+    Choose a preset to quickly configure crop settings. You can still customize after selecting.
+  </p>
+</div>
 
 {/* === TIME SETTINGS SECTION === */}
 <div style={{ marginBottom: 20, borderBottom: '1px solid #ddd', paddingBottom: 10 }}>
@@ -1218,7 +1396,7 @@ const [expandedSections, setExpandedSections] = useState({
       <div style={{ marginBottom: 15, padding: 10, background: '#f4f4f4' }}>
         <strong>Day:</strong> {currentDay}<br />
         <strong>Year:</strong> {current.year + 1 ?? '-'}<br />
-        <strong>Season:</strong> {current.season ?? '-'}<br />
+        <strong>Season:</strong> {actualCurrentSeason}<br />
         <strong>Temperature:</strong> {current.temperature ?? '-'} °F<br />
         <strong>Food Stock:</strong> {foodData[currentDay * 2]?.food ?? '-'} units<br />
         <strong>Consumption Rate:</strong> {activeConfig.dailyConsumption} units/day<br />
@@ -1286,7 +1464,7 @@ const [expandedSections, setExpandedSections] = useState({
   <div style={{ flex: '1 1 45%', minWidth: 400 }}>
     <h3>Temperature Over Time</h3>
     <LineChart 
-      width={450} 
+      width={600} 
       height={400} 
       data={data} 
       margin={{ top: 20, right: 10, left: 10, bottom: 40 }}
@@ -1372,7 +1550,7 @@ const [expandedSections, setExpandedSections] = useState({
   <div style={{ flex: '1 1 45%', minWidth: 400 }}>
     <h3>Food Stock Over Time</h3>
     <LineChart 
-      width={450} 
+      width={600} 
       height={400} 
       data={foodData} 
       margin={{ top: 20, right: 10, left: 10, bottom: 40 }}
