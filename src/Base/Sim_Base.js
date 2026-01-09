@@ -1,45 +1,72 @@
+
 /* ============================================================
-Temperature + Food Simulation
-------------------------------------------------------------
-This component models:
-- A deterministic, seeded climate system
-- Temperature-driven crop growth
-- Daily food consumption
-- Visualization of all systems over time
+   Temperature + Food + Population Simulation
+   ------------------------------------------------------------
+   This component models a complete civilization ecosystem:
+   - Deterministic, seeded climate system with seasonal cycles
+   - Temperature-driven crop growth with bell curve optimization
+   - Population dynamics with birth/death rates
+   - Food production scaled by population size
+   - Interactive visualization of all systems over time
 
-Design goals:
-- Smoothness over hyper-realism
-- Determinism per seed (replayable worlds)
-- Explainability at every layer
-- Clear extension points for future systems
-============================================================ */
+   Design Philosophy:
+   - Smoothness over hyper-realism (gentle curves, not chaos)
+   - Determinism per seed (same seed = identical simulation)
+   - Explainability at every layer (visible causation)
+   - Clear extension points for future systems
+   ============================================================ */
 
-  import { act, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 
 /*
-Recharts is used strictly for visualization.
-All simulation logic is computed beforehand and passed in
-as plain data so it can later be reused outside React.
+  Recharts provides visualization components.
+  All simulation logic is computed beforehand in pure JS,
+  then passed to Recharts as plain data arrays.
+  This separation allows the simulation to be reused outside React.
 */
-  import {
-    LineChart,
-    Line,
-    XAxis,
-    YAxis,
-    CartesianGrid,
-    Tooltip,
-    Legend,
-    ReferenceArea,
-    ReferenceLine
-  } from 'recharts';
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ReferenceArea,
+  ReferenceLine
+} from 'recharts';
 
-  const SEASON_COLORS = {
-    Winter: 'rgba(173, 216, 230, 0.25)',
-    Spring: 'rgba(222, 208, 135, 0.25)',
-    Summer: 'rgba(144, 238, 144, 0.25)',
-    Fall:   'rgba(222, 174, 135, 0.25)'
-  };
+/* ============================================================
+   VISUAL CONSTANTS
+   ============================================================ */
 
+/**
+ * Color mapping for seasonal background shading on charts.
+ * Uses semi-transparent RGBA to allow chart content to remain visible.
+ */
+const SEASON_COLORS = {
+  Winter: 'rgba(173, 216, 230, 0.25)', // Light blue
+  Spring: 'rgba(222, 208, 135, 0.25)', // Pale yellow
+  Summer: 'rgba(144, 238, 144, 0.25)', // Light green
+  Fall:   'rgba(222, 174, 135, 0.25)'  // Pale orange
+};
+
+/* ============================================================
+   CLIMATE PRESETS
+   ============================================================ */
+
+/**
+ * Pre-configured climate patterns for different biomes.
+ * Each preset defines season lengths and temperature characteristics.
+ * 
+ * Structure:
+ * - name: Display name for UI
+ * - description: User-friendly explanation
+ * - config: Parameters that define the climate pattern
+ *   - {season}Length: Days in each season (must sum to 365)
+ *   - {season}Mean: Target average temperature for season
+ *   - {season}Amp: Amplitude of temperature variation within season
+ */
   const CLIMATE_PRESETS = {
     temperate: {
       name: 'Temperate',
@@ -65,15 +92,15 @@ as plain data so it can later be reused outside React.
       description: 'Hot days, cold nights, minimal rainfall simulation',
       config: {
         winterLength: 120,  // Long, mild winter
-        springLength: 60,   // Short spring
-        summerLength: 150,  // Very long, hot summer
-        fallLength: 35,     // Short fall
+        springLength: 60,   // Short spring transition
+        summerLength: 150,  // Extended scorching summer
+        fallLength: 35,     // Brief fall transition
         winterMean: 50,     // Mild winter days
-        winterAmp: 15,      // Large day/night swings
+        winterAmp: 15,      // Large day/night temperature swings
         springMean: 70,
         springAmp: 18,
-        summerMean: 95,     // Scorching summer
-        summerAmp: 20,      // Extreme day/night variation
+        summerMean: 95,     // Extreme summer heat
+        summerAmp: 20,      // Extreme temperature variation
         fallMean: 65,
         fallAmp: 15,
       }
@@ -88,7 +115,7 @@ as plain data so it can later be reused outside React.
         summerLength: 92,
         fallLength: 91,
         winterMean: 75,     // Warm "winter"
-        winterAmp: 5,       // Very stable
+        winterAmp: 5,       // Very stable temperatures
         springMean: 80,
         springAmp: 5,
         summerMean: 85,     // Hot but not extreme
@@ -102,15 +129,15 @@ as plain data so it can later be reused outside React.
       name: 'Arctic',
       description: 'Long, brutal winters with brief summer growing season',
       config: {
-        winterLength: 240,  // 8 months of winter
-        springLength: 30,   // Short spring
-        summerLength: 60,   // Brief summer
-        fallLength: 35,     // Short fall
-        winterMean: -10,    // Freezing
+        winterLength: 240,  // 8 months of frozen winter
+        springLength: 30,   // Short thaw period
+        summerLength: 60,   // Brief growing season
+        fallLength: 35,     // Quick freeze
+        winterMean: -10,    // Below freezing
         winterAmp: 8,
         springMean: 25,
         springAmp: 10,
-        summerMean: 50,     // Cool summer
+        summerMean: 50,     // Cool even at peak
         summerAmp: 12,
         fallMean: 10,
         fallAmp: 10,
@@ -125,7 +152,7 @@ as plain data so it can later be reused outside React.
         springLength: 80,
         summerLength: 120,
         fallLength: 65,
-        winterMean: 45,     // Mild winter
+        winterMean: 45,     // Mild, rainy winter
         winterAmp: 8,
         springMean: 60,
         springAmp: 10,
@@ -137,353 +164,523 @@ as plain data so it can later be reused outside React.
     }
   };
 
-  const CROP_PRESETS = {
-    wheat: {
-      name: "Wheat",
-      description: "A staple crop that grows well in temperate climates",
-      config: {
-        optimalTemp: 64,
-        tolerance: 13,
-        minGrowth: 50,
-        maxGrowth: 600
-      }
-    },
-
-    soybeans: {
-      name: "Soybeans",
-      description: "A versatile crop suited for warm climates",
-      config: {
-        optimalTemp: 77,
-        tolerance: 11,
-        minGrowth: 50,
-        maxGrowth: 500
-      }
-    },
-
-    rice: {
-      name: "Rice",
-      description: "A tropical grain requiring high temperatures",
-      config: {
-        optimalTemp: 82,
-        tolerance: 9,
-        minGrowth: 100,
-        maxGrowth: 800
-      }
-    },
-
-    potatoes: {
-      name: "Potatoes",
-      description: "A hardy root vegetable for temperate regions",
-      config: {
-        optimalTemp: 63,
-        tolerance: 7,
-        minGrowth: 70,
-        maxGrowth: 700
-      }
-    },
-
-    carrots: {
-      name: "Carrots",
-      description: "A cool-weather root crop",
-      config: {
-        optimalTemp: 61,
-        tolerance: 7,
-        minGrowth: 50,
-        maxGrowth: 500
-      }
-    },
-
-    sugarCane: {
-      name: "Sugar Cane",
-      description: "A tropical grass requiring high heat",
-      config: {
-        optimalTemp: 86,
-        tolerance: 11,
-        minGrowth: 150,
-        maxGrowth: 1200
-      }
-    },
-
-    pineapple: {
-      name: "Pineapple",
-      description: "A tropical fruit with moderate yields",
-      config: {
-        optimalTemp: 79,
-        tolerance: 9,
-        minGrowth: 30,
-        maxGrowth: 400
-      }
-    },
-
-    barley: {
-      name: "Barley",
-      description: "A temperate grain similar to wheat",
-      config: {
-        optimalTemp: 63,
-        tolerance: 11,
-        minGrowth: 50,
-        maxGrowth: 500
-      }
-    },
-
-    bananas: {
-      name: "Bananas",
-      description: "A tropical fruit requiring consistent heat",
-      config: {
-        optimalTemp: 84,
-        tolerance: 7,
-        minGrowth: 100,
-        maxGrowth: 1000
-      }
-    },
-
-    cotton: {
-      name: "Cotton",
-      description: "A warm-weather fiber crop",
-      config: {
-        optimalTemp: 81,
-        tolerance: 11,
-        minGrowth: 40,
-        maxGrowth: 600
-      }
-    }  
-  }
-
 /* ============================================================
-=== HELPER FUNCTIONS =======================================
-============================================================ */
+   CROP PRESETS
+   ============================================================ */
 
 /**
- * Determine the active season for a given day of the year.
- *
- * @param {number} dayOfYear - Integer from 0 to 364
- * @returns {{
- *   name: string,
- *   progress: number
- * }}
- *
- * progress is normalized (0 → 1) within the season
- * and is used for smooth intra-season curves.
+ * Pre-configured crop types with different temperature preferences.
+ * Each crop has an optimal growing temperature and tolerance range.
+ * 
+ * Structure:
+ * - name: Display name
+ * - description: Growing characteristics
+ * - config: Growth parameters
+ *   - optimalTemp: Peak growth temperature (°F)
+ *   - tolerance: Standard deviation (wider = more forgiving)
+ *   - minGrowth: Safety floor (food produced at worst temps)
+ *   - maxGrowth: Peak production (food at optimal temp)
  */
-  function getSeasonForDay(dayOfYear, seasons) {
-    let accumulated = 0;
-
-    for (const season of seasons) {
-      if (dayOfYear < accumulated + season.length) {
-        return {
-          name: season.name,
-          progress: (dayOfYear - accumulated) / season.length
-        };
-      }
-      accumulated += season.length;
+const CROP_PRESETS = {
+  wheat: {
+    name: "Wheat",
+    description: "A staple crop that grows well in temperate climates",
+    config: {
+      optimalTemp: 64,
+      tolerance: 13,
+      minGrowth: 50,
+      maxGrowth: 600
     }
+  },
 
-    // Defensive fallback (should never occur)
-    return { name: 'Winter', progress: 0 };
+  soybeans: {
+    name: "Soybeans",
+    description: "A versatile crop suited for warm climates",
+    config: {
+      optimalTemp: 77,
+      tolerance: 11,
+      minGrowth: 50,
+      maxGrowth: 500
+    }
+  },
+
+  rice: {
+    name: "Rice",
+    description: "A tropical grain requiring high temperatures",
+    config: {
+      optimalTemp: 82,
+      tolerance: 9,
+      minGrowth: 100,
+      maxGrowth: 800
+    }
+  },
+
+  potatoes: {
+    name: "Potatoes",
+    description: "A hardy root vegetable for temperate regions",
+    config: {
+      optimalTemp: 63,
+      tolerance: 7,
+      minGrowth: 70,
+      maxGrowth: 700
+    }
+  },
+
+  carrots: {
+    name: "Carrots",
+    description: "A cool-weather root crop",
+    config: {
+      optimalTemp: 61,
+      tolerance: 7,
+      minGrowth: 50,
+      maxGrowth: 500
+    }
+  },
+
+  sugarCane: {
+    name: "Sugar Cane",
+    description: "A tropical grass requiring high heat",
+    config: {
+      optimalTemp: 86,
+      tolerance: 11,
+      minGrowth: 150,
+      maxGrowth: 1200
+    }
+  },
+
+  pineapple: {
+    name: "Pineapple",
+    description: "A tropical fruit with moderate yields",
+    config: {
+      optimalTemp: 79,
+      tolerance: 9,
+      minGrowth: 30,
+      maxGrowth: 400
+    }
+  },
+
+  barley: {
+    name: "Barley",
+    description: "A temperate grain similar to wheat",
+    config: {
+      optimalTemp: 63,
+      tolerance: 11,
+      minGrowth: 50,
+      maxGrowth: 500
+    }
+  },
+
+  bananas: {
+    name: "Bananas",
+    description: "A tropical fruit requiring consistent heat",
+    config: {
+      optimalTemp: 84,
+      tolerance: 7,
+      minGrowth: 100,
+      maxGrowth: 1000
+    }
+  },
+
+  cotton: {
+    name: "Cotton",
+    description: "A warm-weather fiber crop",
+    config: {
+      optimalTemp: 81,
+      tolerance: 11,
+      minGrowth: 40,
+      maxGrowth: 600
+    }
+  }  
+}
+
+/* ============================================================
+   HELPER FUNCTIONS - SEASON LOGIC
+   ============================================================ */
+
+/**
+ * Determine which season a given day falls into.
+ * 
+ * The year is divided into seasons based on configured lengths.
+ * Each season tracks its own progress (0 to 1) for smooth transitions.
+ * 
+ * @param {number} dayOfYear - Day index within the year (0-364)
+ * @param {Array<{name: string, length: number}>} seasons - Season definitions
+ * @returns {{name: string, progress: number}} Season name and normalized progress (0-1)
+ * 
+ * Example:
+ * - dayOfYear = 45, seasons = [{Winter, 90}, {Spring, 92}, ...]
+ * - Returns: {name: 'Winter', progress: 0.5} (halfway through winter)
+ */
+function getSeasonForDay(dayOfYear, seasons) {
+  let accumulated = 0; // Running total of days consumed by previous seasons
+
+  // Iterate through seasons in order
+  for (const season of seasons) {
+    // Check if this day falls within the current season's range
+    if (dayOfYear < accumulated + season.length) {
+      // Calculate how far through this season we are (0.0 to 1.0)
+      const progress = (dayOfYear - accumulated) / season.length;
+      
+      return {
+        name: season.name,
+        progress: progress
+      };
+    }
+    
+    // This season is complete, add its length to the accumulator
+    accumulated += season.length;
   }
+
+  // Defensive fallback (should never occur if seasons sum to 365)
+  return { name: 'Winter', progress: 0 };
+}
+
+/* ============================================================
+   HELPER FUNCTIONS - TEMPERATURE GENERATION
+   ============================================================ */
 
 /**
  * Generate the smooth annual temperature baseline.
- *
- * This function represents the "climate backbone".
- * All noise, daily swings, and extreme events are layered on top.
- *
- * @param {string} seasonName - Current season name
- * @param {number} progress - Normalized progress through the season (0–1)
- * @param {number} dayOfYear - Day index within the year
+ * 
+ * This is the "climate backbone" - a smooth curve that defines
+ * the expected temperature throughout the year. All other temperature
+ * effects (daily weather, noise, extremes) are layered on top.
+ * 
+ * Algorithm:
+ * 1. Reorder seasons starting from the user's chosen starting season
+ * 2. Calculate the midpoint day of each season
+ * 3. Find which two season midpoints the current day falls between
+ * 4. Interpolate between those two temperatures using cosine smoothing
+ * 5. Add small intra-seasonal variation based on season amplitude
+ * 
+ * @param {string} seasonName - Name of current season (not used, kept for future)
+ * @param {number} progress - Progress through current season 0-1 (used for intra-season variation)
+ * @param {number} dayOfYear - Day index within the year (0-364)
+ * @param {Object} seasonProfiles - Temperature characteristics per season {Winter: {mean, amp}, ...}
+ * @param {Array} seasons - Season definitions [{name, length}, ...]
+ * @param {string} startingSeason - Which season the year starts with
  * @returns {number} Baseline temperature in °F
  */
-  function seasonalBaseline(seasonName, progress, dayOfYear, seasonProfiles, seasons, startingSeason) {
-    // Build ordered seasons starting from the starting season
-    const seasonNames = seasons.map(s => s.name);
-    const startIndex = seasonNames.indexOf(startingSeason);
-    const orderedSeasons = [
-    ...seasons.slice(startIndex),
-    ...seasons.slice(0, startIndex)
-    ];
+function seasonalBaseline(seasonName, progress, dayOfYear, seasonProfiles, seasons, startingSeason) {
+  // === STEP 1: Reorder seasons to start from user's chosen season ===
+  const seasonNames = seasons.map(s => s.name);
+  const startIndex = seasonNames.indexOf(startingSeason);
+  
+  // Create a new array: seasons from startingSeason onward, then wrap around
+  const orderedSeasons = [
+    ...seasons.slice(startIndex),    // From starting season to end
+    ...seasons.slice(0, startIndex)  // From beginning to starting season
+  ];
 
-    // Calculate season midpoints and their target temperatures
-    const seasonMidpoints = [];
-    let cumulativeDays = 0;
+  // === STEP 2: Calculate midpoint of each season ===
+  const seasonMidpoints = [];
+  let cumulativeDays = 0; // Track total days as we go
 
-    for (let i = 0; i < orderedSeasons.length; i++) {
-      const season = orderedSeasons[i];
-      const midpoint = cumulativeDays + season.length / 2;
+  for (let i = 0; i < orderedSeasons.length; i++) {
+    const season = orderedSeasons[i];
+    
+    // Midpoint is halfway through this season
+    const midpoint = cumulativeDays + season.length / 2;
 
-      seasonMidpoints.push({
-        name: season.name,
-        midpointDay: midpoint,
-        mean: seasonProfiles[season.name]?.mean ?? 50,
-        amp: seasonProfiles[season.name]?.amp ?? 0,
-        length: season.length
-      });
+    seasonMidpoints.push({
+      name: season.name,
+      midpointDay: midpoint,
+      mean: seasonProfiles[season.name]?.mean ?? 50,  // Target temp
+      amp: seasonProfiles[season.name]?.amp ?? 0,     // Variation amount
+      length: season.length
+    });
 
-      cumulativeDays += season.length;
-    }
+    cumulativeDays += season.length;
+  }
 
-    // Find current position in the year
-    const currentDayInYear = dayOfYear % 365;
+  // === STEP 3: Find current position in year ===
+  const currentDayInYear = dayOfYear % 365;
 
-    // Find the two closest season midpoints to interpolate between
-    let prevMidpoint = seasonMidpoints[seasonMidpoints.length - 1];
-    let nextMidpoint = seasonMidpoints[0];
+  // === STEP 4: Find the two closest season midpoints ===
+  // We'll interpolate between these two temperatures
+  let prevMidpoint = seasonMidpoints[seasonMidpoints.length - 1]; // Default to last
+  let nextMidpoint = seasonMidpoints[0];                           // Default to first
 
-    for (let i = 0; i < seasonMidpoints.length; i++) {
-      const curr = seasonMidpoints[i];
-      const next = seasonMidpoints[(i + 1) % seasonMidpoints.length];
+  for (let i = 0; i < seasonMidpoints.length; i++) {
+    const curr = seasonMidpoints[i];
+    const next = seasonMidpoints[(i + 1) % seasonMidpoints.length]; // Wrap around
 
-      // Check if current day falls between this midpoint and the next
-      if (i === seasonMidpoints.length - 1) {
-      // Handle wrap-around case (last season wrapping to first)
-        if (currentDayInYear >= curr.midpointDay || currentDayInYear < next.midpointDay) {
-          prevMidpoint = curr;
-          nextMidpoint = next;
-          break;
-        }
-      } else {
-        if (currentDayInYear >= curr.midpointDay && currentDayInYear < next.midpointDay) {
+    // Handle wrap-around case (last season to first season of next year)
+    if (i === seasonMidpoints.length - 1) {
+      if (currentDayInYear >= curr.midpointDay || currentDayInYear < next.midpointDay) {
         prevMidpoint = curr;
         nextMidpoint = next;
         break;
-        }
+      }
+    } 
+    // Normal case: day falls between two consecutive midpoints
+    else {
+      if (currentDayInYear >= curr.midpointDay && currentDayInYear < next.midpointDay) {
+        prevMidpoint = curr;
+        nextMidpoint = next;
+        break;
       }
     }
-
-    // Calculate distance from previous midpoint
-    let distanceFromPrev;
-    let totalDistance;
-
-    if (prevMidpoint.midpointDay > nextMidpoint.midpointDay) {
-    // Wrap-around case
-      if (currentDayInYear >= prevMidpoint.midpointDay) {
-        distanceFromPrev = currentDayInYear - prevMidpoint.midpointDay;
-      } else {
-        distanceFromPrev = (365 - prevMidpoint.midpointDay) + currentDayInYear;
-      }
-      totalDistance = (365 - prevMidpoint.midpointDay) + nextMidpoint.midpointDay;
-    } else {
-      distanceFromPrev = currentDayInYear - prevMidpoint.midpointDay;
-      totalDistance = nextMidpoint.midpointDay - prevMidpoint.midpointDay;
-    }
-
-    // Progress between the two midpoints (0 to 1)
-    const progressBetweenMidpoints = distanceFromPrev / totalDistance;
-
-    // Smooth cosine interpolation
-    const smoothProgress = (1 - Math.cos(progressBetweenMidpoints * Math.PI)) / 2;
-    const baseTemp = prevMidpoint.mean + (nextMidpoint.mean - prevMidpoint.mean) * smoothProgress;
-
-    // Add intra-seasonal variation
-    // Use the season we're currently closer to
-    const currentSeasonMidpoint = progressBetweenMidpoints < 0.5 ? prevMidpoint : nextMidpoint;
-    const seasonProgress = progress; // Progress within current season (0-1)
-    const intraSeason = currentSeasonMidpoint.amp * Math.sin(seasonProgress * Math.PI) * 0.3;
-
-    return baseTemp + intraSeason;
   }
+
+  // === STEP 5: Calculate distance between midpoints ===
+  let distanceFromPrev;  // How far from previous midpoint
+  let totalDistance;     // Total distance between the two midpoints
+
+  // Handle year wrap-around (e.g., from Fall to Winter of next year)
+  if (prevMidpoint.midpointDay > nextMidpoint.midpointDay) {
+    // We're wrapping around the year boundary
+    if (currentDayInYear >= prevMidpoint.midpointDay) {
+      // We're after the previous midpoint
+      distanceFromPrev = currentDayInYear - prevMidpoint.midpointDay;
+    } else {
+      // We've wrapped to next year
+      distanceFromPrev = (365 - prevMidpoint.midpointDay) + currentDayInYear;
+    }
+    totalDistance = (365 - prevMidpoint.midpointDay) + nextMidpoint.midpointDay;
+  } 
+  // Normal case: both midpoints in same year
+  else {
+    distanceFromPrev = currentDayInYear - prevMidpoint.midpointDay;
+    totalDistance = nextMidpoint.midpointDay - prevMidpoint.midpointDay;
+  }
+
+  // === STEP 6: Interpolate between the two temperatures ===
+  // Normalize to 0-1 range
+  const progressBetweenMidpoints = distanceFromPrev / totalDistance;
+
+  // Use cosine interpolation for smooth, natural transitions
+  // This creates an S-curve that avoids sudden temperature changes
+  const smoothProgress = (1 - Math.cos(progressBetweenMidpoints * Math.PI)) / 2;
+  
+  // Calculate base temperature by blending the two season means
+  const baseTemp = prevMidpoint.mean + (nextMidpoint.mean - prevMidpoint.mean) * smoothProgress;
+
+  // === STEP 7: Add intra-seasonal variation ===
+  // Small temperature wiggle within the season based on its amplitude setting
+  const currentSeasonMidpoint = progressBetweenMidpoints < 0.5 ? prevMidpoint : nextMidpoint;
+  
+  // Use sine wave to create gentle mid-season temperature bump
+  // Factor of 0.3 keeps this subtle (not overwhelming the main curve)
+  const intraSeason = currentSeasonMidpoint.amp * Math.sin(progress * Math.PI) * 0.3;
+
+  return baseTemp + intraSeason;
+}
 
 /**
  * Inject rare but deterministic extreme weather events.
- *
- * @param {number} dayIndex - Absolute day index
- * @param {string} seasonName - Current season
- * @param {number} seed - Simulation seed
- * @returns {number} Temperature delta (°F)
+ * 
+ * Uses sine functions with the seed to create pseudo-random but
+ * repeatable weather events. Events are rare (3% chance per day)
+ * but have significant temperature impact when they occur.
+ * 
+ * Seasonal behavior:
+ * - Summer: Heat waves (positive delta)
+ * - Winter: Cold snaps (negative delta)
+ * - Spring/Fall: Can swing either way
+ * 
+ * @param {number} dayIndex - Absolute day index in simulation
+ * @param {string} seasonName - Current season ('Winter', 'Spring', 'Summer', 'Fall')
+ * @param {number} seed - Simulation seed for determinism
+ * @returns {number} Temperature delta to add (°F), usually 0
  */
-  function extremeEvent(dayIndex, seasonName, seed) {
-    const signal = Math.sin(dayIndex * 0.173 + seed * 100) * 0.5 + 0.5;
+function extremeEvent(dayIndex, seasonName, seed) {
+  // Generate a pseudo-random signal based on day and seed
+  // Range: 0 to 1
+  const signal = Math.sin(dayIndex * 0.173 + seed * 100) * 0.5 + 0.5;
 
-    // Most days have no extreme event
-    if (signal < 0.97) return 0;
+  // Only 3% of days have extreme events (signal > 0.97)
+  if (signal < 0.97) return 0;
 
-    const magnitude =
-    8 + 6 * Math.abs(Math.sin(dayIndex * 0.91));
+  // Calculate event magnitude (8-14°F range)
+  // Uses different frequency to decorrelate from the trigger signal
+  const magnitude = 8 + 6 * Math.abs(Math.sin(dayIndex * 0.91));
 
-    if (seasonName === 'Summer') return +magnitude;
-    if (seasonName === 'Winter') return -magnitude;
+  // Determine direction based on season
+  if (seasonName === 'Summer') return +magnitude;  // Heat wave
+  if (seasonName === 'Winter') return -magnitude;  // Cold snap
 
-    // Shoulder seasons can swing either way
-    return Math.sin(dayIndex * 0.37) > 0 ? +magnitude : -magnitude;
-  }
+  // Spring and Fall can swing either way (use another sine function)
+  return Math.sin(dayIndex * 0.37) > 0 ? +magnitude : -magnitude;
+}
+
+/* ============================================================
+   HELPER FUNCTIONS - CROP & FOOD PRODUCTION
+   ============================================================ */
 
 /**
- * Convert temperature into daily food growth.
- *
- * Uses a Gaussian bell curve centered on optimalTemp.
- *
- * @param {number} temperature - Daily average temperature (°F)
+ * Calculate daily food production based on temperature and population.
+ * 
+ * Uses a Gaussian (bell curve) distribution centered on the crop's
+ * optimal temperature. Production scales with population size to
+ * simulate farmland expansion as civilization grows.
+ * 
+ * Formula:
+ * 1. Base growth = minGrowth + maxGrowth * bellCurve(temp)
+ * 2. Population factor = 1.0 for pop < 100, increases by 0.5 per 100 people
+ * 3. Final growth = minGrowth + (scaledMaxGrowth * bellCurve)
+ * 
+ * @param {number} temperature - Current day's temperature (°F)
+ * @param {Object} cropConfig - Crop parameters {optimalTemp, tolerance, maxGrowth, minGrowth}
+ * @param {number} population - Current population size
  * @returns {number} Food units produced this day
  */
-  function calculateGrowth(temperature, cropConfig, population) {
-    const { optimalTemp, tolerance, maxGrowth, minGrowth } = cropConfig;
+function calculateGrowth(temperature, cropConfig, population) {
+  const { optimalTemp, tolerance, maxGrowth, minGrowth } = cropConfig;
 
-    // Scale maxGrowth based on population (farmland expansion)
-    const populationFactor = population < 100 ? 1 : (Math.floor(population / 100) * 0.5);
-    const scaledMaxGrowth = maxGrowth * populationFactor;
+  // === Population scaling factor ===
+  // Small populations (< 100) use baseline growth
+  // Larger populations expand farmland: +0.5x multiplier per 100 people
+  const populationFactor = population < 100 ? 1 : (Math.floor(population / 100) * 0.5);
+  const scaledMaxGrowth = maxGrowth * populationFactor;
 
-    const deviation = temperature - optimalTemp;
-    const bellCurve = Math.exp(-(deviation ** 2) / (2 * tolerance ** 2));
+  // === Temperature optimality calculation ===
+  // How far from ideal temperature?
+  const deviation = temperature - optimalTemp;
 
-    return minGrowth + scaledMaxGrowth * bellCurve;
-  }
+  // Gaussian bell curve: e^(-(x²)/(2σ²))
+  // - At optimal temp: bellCurve = 1.0 (maximum)
+  // - Far from optimal: bellCurve approaches 0
+  // - tolerance is standard deviation (σ)
+  const bellCurve = Math.exp(-(deviation ** 2) / (2 * tolerance ** 2));
 
-  function calculateBasicGrowth(temperature, cropConfig) {
-    const { optimalTemp, tolerance, maxGrowth, minGrowth } = cropConfig;
-    const deviation = temperature - optimalTemp;
-    const bellCurve = Math.exp(-(deviation ** 2) / (2 * tolerance ** 2));
-    return minGrowth + maxGrowth * bellCurve;
-  }
+  // === Final production ===
+  // Always produce at least minGrowth, even in terrible conditions
+  // Add scaled maximum production weighted by how close to optimal we are
+  return minGrowth + scaledMaxGrowth * bellCurve;
+}
 
-  function calculatePopulationChange(population, foodStock, totalFoodNeeded, config) {
-    const { baseBirthRate, baseDeathRate } = config;
+/**
+ * Calculate basic crop growth without population scaling.
+ * 
+ * This is the "pure" growth curve used for visualization.
+ * Shows how temperature alone affects crop yields.
+ * 
+ * @param {number} temperature - Current temperature (°F)
+ * @param {Object} cropConfig - Crop parameters {optimalTemp, tolerance, maxGrowth, minGrowth}
+ * @returns {number} Base food units produced (no population factor)
+ */
+function calculateBasicGrowth(temperature, cropConfig) {
+  const { optimalTemp, tolerance, maxGrowth, minGrowth } = cropConfig;
+  
+  // Distance from optimal temperature
+  const deviation = temperature - optimalTemp;
+  
+  // Gaussian bell curve
+  const bellCurve = Math.exp(-(deviation ** 2) / (2 * tolerance ** 2));
+  
+  return minGrowth + maxGrowth * bellCurve;
+}
 
-    // Food scarcity factor (0 = no food, 1 = adequate food)
-    const foodRatio = Math.min(1, foodStock / totalFoodNeeded);
+/* ============================================================
+   HELPER FUNCTIONS - POPULATION DYNAMICS
+   ============================================================ */
 
-    // Adjust rates based on food availability
-    const birthRate = baseBirthRate * foodRatio;
-    const deathRate = baseDeathRate * (2 - foodRatio); // Higher death rate when food is scarce
+/**
+ * Calculate population change based on food availability.
+ * 
+ * Models birth and death rates that respond to food security:
+ * - Adequate food: Normal birth rate, low death rate
+ * - Food shortage: Reduced births, increased deaths
+ * - No food: Minimal births, doubled death rate
+ * 
+ * @param {number} population - Current population count
+ * @param {number} foodStock - Available food units
+ * @param {number} totalFoodNeeded - Food required to feed everyone
+ * @param {Object} config - Population parameters {baseBirthRate, baseDeathRate}
+ * @returns {{births: number, deaths: number, newPopulation: number}} Population change data
+ */
+function calculatePopulationChange(population, foodStock, totalFoodNeeded, config) {
+  const { baseBirthRate, baseDeathRate } = config;
 
-    const births = Math.floor(population * birthRate);
-    const deaths = Math.floor(population * deathRate);
+  // === Food availability factor ===
+  // Range: 0.0 (no food) to 1.0 (adequate food)
+  // Capped at 1.0 so surplus food doesn't boost rates beyond baseline
+  const foodRatio = Math.min(1, foodStock / totalFoodNeeded);
 
-    return { births, deaths, newPopulation: Math.max(0, population + births - deaths) };
-  }
+  // === Adjust rates based on food security ===
+  // Birth rate: Scales linearly with food (no food = no births)
+  const birthRate = baseBirthRate * foodRatio;
+  
+  // Death rate: Inverted relationship (more food = fewer deaths)
+  // Formula: baseDeathRate * (2 - foodRatio)
+  // - foodRatio = 1.0: deathRate = baseDeathRate (normal)
+  // - foodRatio = 0.5: deathRate = 1.5 × baseDeathRate (elevated)
+  // - foodRatio = 0.0: deathRate = 2 × baseDeathRate (crisis)
+  const deathRate = baseDeathRate * (2 - foodRatio);
 
-/*  ============================================================
-=== MAIN REACT COMPONENT ==================================
-============================================================ */
+  // === Calculate absolute numbers ===
+  const births = Math.floor(population * birthRate);
+  const deaths = Math.floor(population * deathRate);
 
-  export default function TemperatureSimulation() {
-/*============================================================
-=== COMPONENT STATE ========================================
-============================================================ */
+  // === Update population ===
+  // Cannot go below zero
+  const newPopulation = Math.max(0, population + births - deaths);
 
-/*
-Full temperature timeline.
-One entry per day containing: dayIndex, year, dayOfYear, season, temperature
-*/
+  return { 
+    births, 
+    deaths, 
+    newPopulation 
+  };
+}
+
+/* ============================================================
+   MAIN REACT COMPONENT
+   ============================================================ */
+
+/**
+ * Main simulation component.
+ * 
+ * Manages:
+ * - Temperature simulation (deterministic climate system)
+ * - Food production (temperature-driven crop growth)
+ * - Population dynamics (birth/death based on food)
+ * - Interactive visualization of all three systems
+ * - User configuration via settings panel
+ */
+export default function TemperatureSimulation() {
+  /* ============================================================
+     STATE MANAGEMENT
+     ============================================================ */
+
+  /**
+   * Full temperature timeline.
+   * Array of objects: [{dayIndex, year, dayOfYear, season, temperature}, ...]
+   * Generated once per seed change, then used for all visualizations.
+   */
   const [data, setData] = useState([]);
 
-/*
-Current day being viewed (controlled by scrubber slider).
-Range: 0 to totalDays - 1
-*/
+  /**
+   * Currently viewed day in the timeline.
+   * Controlled by the scrubber slider.
+   * Range: 0 to (totalDays - 1)
+   */
   const [currentDay, setCurrentDay] = useState(0);
 
-/*
-Random seed for deterministic generation.
-Same seed = same weather pattern.
-Changes when user clicks "Generate New Pattern".
-*/
+  /**
+   * Random seed for deterministic weather generation.
+   * Same seed always produces the same climate pattern.
+   * Changes when user clicks "Generate New Pattern" button.
+   */
   const [seed, setSeed] = useState(Math.random());
 
+  /**
+   * Active simulation configuration.
+   * These are the parameters currently being used for simulation.
+   * Updated only when user clicks "Save Changes & Regenerate".
+   */
   const [activeConfig, setActiveConfig] = useState({
-    yearCount: 1,
+    // Time settings
+    yearCount: 1,                    // Number of years to simulate
+    startingSeason: 'Spring',        // Which season day 0 begins in
+    
+    // Season lengths (must sum to 365)
     winterLength: 90,
     springLength: 92,
     summerLength: 92,
     fallLength: 91,
+    
+    // Season temperature profiles
     winterMean: 15,
     winterAmp: 10,
     springMean: 65,
@@ -492,240 +689,447 @@ Changes when user clicks "Generate New Pattern".
     summerAmp: 10,
     fallMean: 55,
     fallAmp: 12,
-    optimalTemp: 65,
-    tolerance: 18,
-    maxGrowth: 1000,
-    minGrowth: 100,
-    startingFood: 10000,
-    startingSeason: 'Spring',
-    startingPopulation: 1000,
-    baseBirthRate: 0.01,
-    baseDeathRate: 0.008,
-    foodPerPerson: 1
+    
+    // Crop characteristics
+    optimalTemp: 65,                 // Best growing temperature (°F)
+    tolerance: 18,                   // Temperature tolerance (σ)
+    maxGrowth: 1000,                 // Peak daily production
+    minGrowth: 100,                  // Minimum daily production
+    
+    // Food economy
+    startingFood: 10000,             // Initial food stockpile
+    foodPerPerson: 1,                // Daily food consumption per person
+    
+    // Population settings
+    startingPopulation: 1000,        // Initial population
+    baseBirthRate: 0.01,            // 1% birth rate at full food
+    baseDeathRate: 0.008,           // 0.8% death rate at full food
   });
 
+  /**
+   * Working configuration being edited in settings panel.
+   * Changes here don't affect simulation until user saves.
+   */
   const [workingConfig, setWorkingConfig] = useState({...activeConfig});
 
-/*
-Food stock timeline.
-Two entries per day: one after growth (x: day), one after consumption (x: day + 0.5).
-Creates the sawtooth pattern visible on food chart.
-*/
-
+  /**
+   * Food stock timeline.
+   * Array of objects with two entries per day:
+   * 1. After harvest (x: day)
+   * 2. After consumption (x: day + 0.5)
+   * This creates the sawtooth pattern visible on the food chart.
+   */
   const [foodData, setFoodData] = useState([]);
 
+  /**
+   * Population timeline.
+   * Array of objects: [{x, population, births, deaths, foodRatio}, ...]
+   * One entry per day tracking population changes and causes.
+   */
   const [populationData, setPopulationData] = useState([]);
 
-
-/*
-Controls visibility of the settings side panel.
-true = panel slides in from right, false = panel hidden
-*/
+  /**
+   * Controls visibility of settings side panel.
+   * true: Panel slides in from right
+   * false: Panel hidden off-screen
+   */
   const [showSettings, setShowSettings] = useState(false);
 
-// === TIME SETTINGS ===
-/*
-Number of years to simulate.
-Total days = yearCount × 365
-Affects: simulation length, chart x-axis domain
-*/
+  /**
+   * Legacy state variable (kept for compatibility).
+   * Actual year count is now stored in activeConfig.yearCount.
+   */
   const [yearCount, setYearCount] = useState(1);
 
-// Track which settings sections are expanded
+  /**
+   * Track which sections of settings panel are expanded.
+   * Each section can be independently collapsed/expanded.
+   */
   const [expandedSections, setExpandedSections] = useState({
-    time: true,      // Start with time section open
+    time: true,       // Start with time section open
     seasons: false,
     profiles: false,
     crop: false,
     food: false
   });
 
-/*
-Generate both temperature and food simulations
-whenever the seed changes.
-*/
+  /* ============================================================
+     SIMULATION GENERATION
+     ============================================================ */
 
+  /**
+   * Main simulation effect.
+   * Triggers when seed or activeConfig changes.
+   * 
+   * Process:
+   * 1. Generate temperature data for all days
+   * 2. Simulate food production based on temperatures
+   * 3. Simulate population changes based on food availability
+   * 4. Store all results in state arrays for visualization
+   */
   useEffect(() => {
-  // Calculate total days from activeConfig
-  const totalDays = 365 * activeConfig.yearCount;
+    // === SETUP: Extract configuration ===
+    const totalDays = 365 * activeConfig.yearCount;
+
+    // Build crop config object
+    const cropConfig = {
+      optimalTemp: activeConfig.optimalTemp,
+      tolerance: activeConfig.tolerance,
+      maxGrowth: activeConfig.maxGrowth,
+      minGrowth: activeConfig.minGrowth
+    };
+
+    // Build seasons array
+    const seasons = [
+      { name: 'Winter', length: activeConfig.winterLength },
+      { name: 'Spring', length: activeConfig.springLength },
+      { name: 'Summer', length: activeConfig.summerLength },
+      { name: 'Fall', length: activeConfig.fallLength }
+    ];
+
+    // Build season profiles (temperature characteristics)
+    const seasonProfiles = {
+      Winter: { mean: activeConfig.winterMean, amp: activeConfig.winterAmp },
+      Spring: { mean: activeConfig.springMean, amp: activeConfig.springAmp },
+      Summer: { mean: activeConfig.summerMean, amp: activeConfig.summerAmp },
+      Fall: { mean: activeConfig.fallMean, amp: activeConfig.fallAmp }
+    };
+
+    const generated = [];
 
 
-  // Build crop config from activeConfig
-  const cropConfig = {
-    optimalTemp: activeConfig.optimalTemp,
-    tolerance: activeConfig.tolerance,
-    maxGrowth: activeConfig.maxGrowth,
-    minGrowth: activeConfig.minGrowth
-  };
-
-  // Build seasons array from activeConfig
-  const seasons = [
-    { name: 'Winter', length: activeConfig.winterLength },
-    { name: 'Spring', length: activeConfig.springLength },
-    { name: 'Summer', length: activeConfig.summerLength },
-    { name: 'Fall', length: activeConfig.fallLength }
-  ];
-
-  // Build season profiles from activeConfig
-  const seasonProfiles = {
-    Winter: { mean: activeConfig.winterMean, amp: activeConfig.winterAmp },
-    Spring: { mean: activeConfig.springMean, amp: activeConfig.springAmp },
-    Summer: { mean: activeConfig.summerMean, amp: activeConfig.summerAmp },
-    Fall: { mean: activeConfig.fallMean, amp: activeConfig.fallAmp }
-  };
-
-  const generated = [];
-
-  /* ==============================
-  TEMPERATURE SIMULATION
-  ============================== */
-  for (let dayIndex = 0; dayIndex < totalDays; dayIndex++) {
-    const year = Math.floor(dayIndex / 365);
-    const dayOfYear = dayIndex % 365;
-
-    const season = getSeasonForDay(dayOfYear, seasons);
-
-    const base = seasonalBaseline(
-      season.name,
-      season.progress,
-      dayOfYear,
-      seasonProfiles,
-      seasons,
-      activeConfig.startingSeason
-    );
-
-    // Weekly oscillation (weather fronts)
-    const daily =
-    2 * Math.sin((2 * Math.PI * dayIndex) / 7);
-
-    // Longer-term noise layers
-    const noise =
-    3 * Math.sin(dayIndex / 20 + seed * 10) +
-    2 * Math.sin(dayIndex / 10 + seed * 20);
-
-    const extreme = extremeEvent(dayIndex, season.name, seed);
-
-    const temp = base + daily + noise + extreme;
-    const safeTemp = Number.isFinite(temp) ? temp : 0;
-
-    generated.push({
-      dayIndex,
-      year,
-      dayOfYear,
-      season: season.name,
-      temperature: Math.round(safeTemp * 10) / 10
-    });
-  }
-
-  setData(generated);
-
-  /* ==============================
-  FOOD & POPULATION SIMULATION
-  ============================== */
-  const foodSimulation = [];
-  const populationSimulation = [];
-  let currentFood = activeConfig.startingFood;
-  let currentPopulation = activeConfig.startingPopulation;
-
-  for (let dayIndex = 0; dayIndex < totalDays; dayIndex++) {
-    const temp = generated[dayIndex].temperature;
-    const growth = calculateGrowth(temp, cropConfig, currentPopulation);
-
-    // --- MORNING: harvest completes ---
-    currentFood += growth;
-
-    // Calculate daily food consumption based on population
-    const totalFoodNeeded = currentPopulation * activeConfig.foodPerPerson;
-
-    // Population change calculation
-    const popChange = calculatePopulationChange(currentPopulation, currentFood, totalFoodNeeded, activeConfig);
-    currentPopulation = popChange.newPopulation;
-
-    // Record population data
-    populationSimulation.push({
-      x: dayIndex,
-      population: Math.round(currentPopulation),
-      births: popChange.births,
-      deaths: popChange.deaths,
-      foodRatio: Math.min(1, currentFood / totalFoodNeeded)
-    });
-
-    foodSimulation.push({
-      x: dayIndex,
-      food: Math.round(currentFood * 10) / 10,
-      phase: 'growth',
-      growth: Math.round(growth * 10) / 10
-    });
-
-    // --- MIDDAY: population consumes ---
-    currentFood -= totalFoodNeeded;
-    if (currentFood < 0) currentFood = 0;
-
-    foodSimulation.push({
-      x: dayIndex + 0.5,
-      food: Math.round(currentFood * 10) / 10,
-      phase: 'consumption',
-      consumed: totalFoodNeeded
-    });
-  }
-
-  setFoodData(foodSimulation);
-  setPopulationData(populationSimulation);
 
 
-  }, [seed, activeConfig]);
+/* ==============================
+   TEMPERATURE SIMULATION
+   ============================== */
 
-/*
-Currently selected day's temperature data.
-*/
-  const current = {
-    ...data[currentDay],
-    population: populationData[currentDay]?.population
-  };
+// Iterate through every day in the simulation
+// This loop generates the complete temperature timeline before any rendering occurs
+for (let dayIndex = 0; dayIndex < totalDays; dayIndex++) {
+  
+  // === Calculate temporal position ===
+  // Determine which year we're in (0-indexed)
+  // Example: day 400 → year 1 (400 ÷ 365 = 1.095... → floor = 1)
+  const year = Math.floor(dayIndex / 365);
+  
+  // Determine position within the current year (0-364)
+  // Example: day 400 → dayOfYear 35 (400 % 365 = 35)
+  const dayOfYear = dayIndex % 365;
 
+  // === Determine current season ===
+  // Get which season this day falls into and how far through it we are
+  // Returns: {name: 'Spring', progress: 0.42} for example
+  const season = getSeasonForDay(dayOfYear, seasons);
 
-// Build seasons array from activeConfig for use in JSX
-  const seasons = [
-    { name: 'Winter', length: activeConfig.winterLength },
-    { name: 'Spring', length: activeConfig.springLength },
-    { name: 'Summer', length: activeConfig.summerLength },
-    { name: 'Fall', length: activeConfig.fallLength }
-  ];
+  // === TEMPERATURE LAYER 1: Seasonal Baseline ===
+  // This is the smooth annual temperature curve that defines the climate
+  // It creates the fundamental "shape" of the year's temperatures
+  // All other temperature effects are variations on top of this foundation
+  const base = seasonalBaseline(
+    season.name,              // Current season name (for reference)
+    season.progress,          // How far through the season (0-1)
+    dayOfYear,                // Day within the year
+    seasonProfiles,           // Temperature characteristics per season
+    seasons,                  // Season length definitions
+    activeConfig.startingSeason  // Which season starts the year
+  );
 
-// Build crop config for use in JSX
-  const cropConfig = {
-    optimalTemp: activeConfig.optimalTemp,
-    tolerance: activeConfig.tolerance,
-    maxGrowth: activeConfig.maxGrowth,
-    minGrowth: activeConfig.minGrowth
-  };
+  // === TEMPERATURE LAYER 2: Weekly Weather Patterns ===
+  // Simulates the passage of weather fronts (high/low pressure systems)
+  // Creates a 7-day cycle that adds ±2°F variation
+  // Formula breakdown:
+  // - (2 * Math.PI * dayIndex) / 7 creates a full sine wave cycle every 7 days
+  // - Multiplying by 2 gives amplitude of ±2°F
+  // This mimics real-world weekly weather patterns
+  const daily = 2 * Math.sin((2 * Math.PI * dayIndex) / 7);
 
+  // === TEMPERATURE LAYER 3: Multi-Frequency Noise ===
+  // Adds natural-looking temperature variation at multiple time scales
+  // This prevents the weather from feeling too regular or predictable
+  // 
+  // Two overlapping sine waves with different frequencies:
+  // 1. Slow wave (20-day cycle): ±3°F - represents longer weather patterns
+  // 2. Fast wave (10-day cycle): ±2°F - represents shorter fluctuations
+  // 
+  // The seed is mixed in (seed * 10, seed * 20) to make each simulation unique
+  // but still deterministic (same seed = same noise pattern)
+  const noise =
+    3 * Math.sin(dayIndex / 20 + seed * 10) +  // Long-period variation
+    2 * Math.sin(dayIndex / 10 + seed * 20);   // Short-period variation
 
-// Calculate the actual current season accounting for starting season
+  // === TEMPERATURE LAYER 4: Extreme Weather Events ===
+  // Rare but significant temperature anomalies
+  // Usually returns 0, but ~3% of days get ±8 to ±14°F events
+  // Direction depends on season (summer heat waves, winter cold snaps)
+  const extreme = extremeEvent(dayIndex, season.name, seed);
+
+  // === COMBINE ALL TEMPERATURE LAYERS ===
+  // Final temperature = baseline + daily weather + noise + extreme events
+  // This layered approach creates realistic weather that:
+  // - Follows seasonal patterns (base)
+  // - Has week-to-week variation (daily)
+  // - Feels natural and unpredictable (noise)
+  // - Includes occasional extreme conditions (extreme)
+  const temp = base + daily + noise + extreme;
+  
+  // === SAFETY CHECK ===
+  // Ensure temperature is a valid number (not NaN or Infinity)
+  // If invalid, default to 0°F to prevent chart rendering issues
+  const safeTemp = Number.isFinite(temp) ? temp : 0;
+
+  // === STORE TEMPERATURE DATA ===
+  // Create a data point for this day with all relevant information
+  // This object will be used for:
+  // - Chart visualization (temperature over time)
+  // - Food production calculation (temperature affects crop growth)
+  // - Season display in UI
+  generated.push({
+    dayIndex,                                  // Absolute day number in simulation
+    year,                                      // Which year (for multi-year display)
+    dayOfYear,                                 // Day within year (for seasonal calculations)
+    season: season.name,                       // Season name (for background shading)
+    temperature: Math.round(safeTemp * 10) / 10  // Round to 1 decimal place for readability
+  });
+}
+
+// === SAVE TEMPERATURE DATA TO STATE ===
+// This triggers a re-render with the new temperature timeline
+// React will update all charts and displays that depend on this data
+setData(generated);
+
+/* ==============================
+   FOOD & POPULATION SIMULATION
+   ============================== */
+
+// Initialize arrays to store daily food and population records
+const foodSimulation = [];       // Will contain 2 entries per day (growth + consumption)
+const populationSimulation = []; // Will contain 1 entry per day (population count + changes)
+
+// Initialize starting conditions from configuration
+let currentFood = activeConfig.startingFood;           // Food stockpile in units
+let currentPopulation = activeConfig.startingPopulation; // Starting population count
+
+// Iterate through every day to simulate the economy
+// This runs AFTER temperature generation so we can look up each day's temperature
+for (let dayIndex = 0; dayIndex < totalDays; dayIndex++) {
+  
+  // === LOOK UP TODAY'S TEMPERATURE ===
+  // Get the temperature we already generated for this day
+  const temp = generated[dayIndex].temperature;
+  
+  // === CALCULATE FOOD PRODUCTION ===
+  // Crop growth depends on:
+  // 1. Temperature (bell curve centered on optimal temp)
+  // 2. Population size (more people = more farmland = more production)
+  const growth = calculateGrowth(temp, cropConfig, currentPopulation);
+
+  // === MORNING PHASE: HARVEST COMPLETES ===
+  // At dawn, the day's crop yield is added to the stockpile
+  // This represents farmers bringing in the harvest
+  currentFood += growth;
+
+  // === CALCULATE DAILY FOOD NEEDS ===
+  // Total food required to feed the entire population
+  // Each person consumes foodPerPerson units per day
+  // Example: 1000 people × 1 unit/person = 1000 units needed
+  const totalFoodNeeded = currentPopulation * activeConfig.foodPerPerson;
+
+  // === CALCULATE POPULATION DYNAMICS ===
+  // Determine births and deaths based on food availability
+  // Well-fed populations grow, starving populations decline
+  // Returns: {births: number, deaths: number, newPopulation: number}
+  const popChange = calculatePopulationChange(
+    currentPopulation,  // Current population count
+    currentFood,        // Food available after harvest
+    totalFoodNeeded,    // Food needed to feed everyone
+    activeConfig        // Birth/death rate configuration
+  );
+  
+  // === UPDATE POPULATION ===
+  // Apply the population change for today
+  currentPopulation = popChange.newPopulation;
+
+  // === RECORD POPULATION DATA POINT ===
+  // Store today's population statistics for visualization
+  // This data powers the population chart and tooltip details
+  populationSimulation.push({
+    x: dayIndex,                                  // X-axis position (day number)
+    population: Math.round(currentPopulation),    // Current population count
+    births: popChange.births,                     // How many were born today
+    deaths: popChange.deaths,                     // How many died today
+    foodRatio: Math.min(1, currentFood / totalFoodNeeded)  // Food security (0-1, capped at 1)
+  });
+
+  // === RECORD FOOD DATA POINT #1: AFTER GROWTH ===
+  // This is the "high point" of the sawtooth pattern
+  // Shows food stock after harvest but before consumption
+  foodSimulation.push({
+    x: dayIndex,                             // X-axis position (day number)
+    food: Math.round(currentFood * 10) / 10, // Current food stock (rounded)
+    phase: 'growth',                         // Phase indicator for tooltip
+    growth: Math.round(growth * 10) / 10     // How much was harvested today
+  });
+
+  // === MIDDAY PHASE: POPULATION CONSUMES FOOD ===
+  // At noon, the population eats their daily ration
+  // This represents the day's food consumption
+  currentFood -= totalFoodNeeded;
+  
+  // === PREVENT NEGATIVE FOOD ===
+  // You can't have less than zero food
+  // If there's a shortage, food goes to 0 (people go hungry)
+  // The population change calculation already factored this in
+  if (currentFood < 0) currentFood = 0;
+
+  // === RECORD FOOD DATA POINT #2: AFTER CONSUMPTION ===
+  // This is the "low point" of the sawtooth pattern
+  // Shows food stock after the population has eaten
+  // The x-position of dayIndex + 0.5 places it between two days
+  // This creates the characteristic sawtooth visualization
+  foodSimulation.push({
+    x: dayIndex + 0.5,                       // X-axis position (halfway through day)
+    food: Math.round(currentFood * 10) / 10, // Current food stock (after consumption)
+    phase: 'consumption',                    // Phase indicator for tooltip
+    consumed: totalFoodNeeded                // How much was consumed
+  });
+}
+
+// === SAVE FOOD AND POPULATION DATA TO STATE ===
+// These trigger re-renders with the new timeline data
+// React will update all charts that depend on these arrays
+setFoodData(foodSimulation);
+setPopulationData(populationSimulation);
+
+}, [seed, activeConfig]); // Effect dependencies: re-run when seed or config changes
+
+/* ============================================================
+   CURRENT DAY DATA OBJECT
+   ============================================================ */
+
+/**
+ * Composite object containing all data for the currently selected day.
+ * This merges temperature data and population data into a single object
+ * for easy access in the UI components.
+ * 
+ * Properties available:
+ * - dayIndex: Absolute day number
+ * - year: Which year this day is in
+ * - dayOfYear: Day within the year (0-364)
+ * - season: Season name
+ * - temperature: Temperature in °F
+ * - population: Current population count
+ */
+const current = {
+  ...data[currentDay],                              // Spread all temperature data
+  population: populationData[currentDay]?.population // Add population (with null safety)
+};
+
+/* ============================================================
+   RENDER-TIME CONFIGURATION OBJECTS
+   ============================================================ */
+
+/**
+ * Seasons array rebuilt from activeConfig for rendering.
+ * This is used by JSX components that need season information
+ * (chart background shading, season labels, etc.)
+ * 
+ * Note: This is rebuilt here rather than stored in state because
+ * it's derived data - it's always computed from activeConfig.
+ */
+const seasons = [
+  { name: 'Winter', length: activeConfig.winterLength },
+  { name: 'Spring', length: activeConfig.springLength },
+  { name: 'Summer', length: activeConfig.summerLength },
+  { name: 'Fall', length: activeConfig.fallLength }
+];
+
+/**
+ * Crop configuration rebuilt from activeConfig for rendering.
+ * Used when displaying crop growth curves and calculating
+ * what-if scenarios in the UI.
+ */
+const cropConfig = {
+  optimalTemp: activeConfig.optimalTemp,
+  tolerance: activeConfig.tolerance,
+  maxGrowth: activeConfig.maxGrowth,
+  minGrowth: activeConfig.minGrowth
+};
+
+/* ============================================================
+   SEASON NAME CALCULATION
+   ============================================================ */
+
+/**
+ * Calculate the actual current season name accounting for starting season offset.
+ * 
+ * This is necessary because the user can choose which season the year starts in.
+ * If they choose "Summer" as the starting season, then day 0 is in Summer,
+ * not Winter. This function handles that remapping.
+ * 
+ * Algorithm:
+ * 1. Validate that we have a valid day
+ * 2. Get the day within the year (0-364)
+ * 3. Reorder seasons to start from the chosen starting season
+ * 4. Accumulate season lengths until we find which season contains this day
+ * 5. Return the season name
+ * 
+ * @returns {string} Season name ('Winter', 'Spring', 'Summer', or 'Fall')
+ */
 const getCurrentSeasonName = () => {
+  // === VALIDATION ===
+  // Check if dayOfYear exists (could be undefined if no data loaded)
+  // Note: dayOfYear can be 0, so we need explicit null/undefined check
   if (!current.dayOfYear && current.dayOfYear !== 0) return '-';
 
+  // === NORMALIZE DAY OF YEAR ===
+  // Ensure we're working with a day within a single year (0-364)
+  // In multi-year simulations, this wraps back to the start
   const dayOfYear = current.dayOfYear % 365;
 
-  // Build ordered seasons starting from starting season
+  // === REORDER SEASONS ===
+  // Build an array of seasons starting from the user's chosen starting season
+  // Example: if starting season is "Summer", order becomes [Summer, Fall, Winter, Spring]
+  
+  // Get array of just season names
   const seasonNames = seasons.map(s => s.name);
+  
+  // Find index of the starting season
   const startIndex = seasonNames.indexOf(activeConfig.startingSeason);
+  
+  // Create reordered array:
+  // - Take seasons from startIndex to end: seasons.slice(startIndex)
+  // - Append seasons from beginning to startIndex: seasons.slice(0, startIndex)
   const orderedSeasons = [
-    ...seasons.slice(startIndex),
-    ...seasons.slice(0, startIndex)
+    ...seasons.slice(startIndex),    // From chosen start to end of year
+    ...seasons.slice(0, startIndex)  // From beginning of year to chosen start
   ];
 
-  // Find which season this day falls into
-  let accumulated = 0;
+  // === FIND WHICH SEASON CONTAINS THIS DAY ===
+  // Accumulate season lengths and check if we've reached the target day
+  let accumulated = 0;  // Running total of days consumed by previous seasons
+  
   for (const season of orderedSeasons) {
+    // Check if this day falls within the current season's range
+    // Example: if accumulated = 90 and season.length = 92,
+    // then this season covers days 90-181
     if (dayOfYear < accumulated + season.length) {
+      // Found it! This day is in this season
       return season.name;
     }
+    
+    // This season is complete, add its length to the running total
     accumulated += season.length;
   }
 
-  return orderedSeasons[0].name; // Fallback
+  // === FALLBACK ===
+  // Should never reach here if seasons sum to 365 correctly
+  // But if they don't (due to user error in settings), default to first season
+  return orderedSeasons[0].name;
 };
+
+// Execute the function to get the actual current season name
+// This value is used throughout the UI to display the current season
 const actualCurrentSeason = getCurrentSeasonName();
 
 
@@ -1830,7 +2234,7 @@ const actualCurrentSeason = getCurrentSeasonName();
         </div>
 
       </div>
-      
+
     </div>
   );
 }
