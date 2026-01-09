@@ -508,6 +508,21 @@ function extremeEvent(dayIndex, seasonName, seed) {
    HELPER FUNCTIONS - CROP & FOOD PRODUCTION
    ============================================================ */
 
+function calculateGrowthFactor(population) {
+  let populationFactor = 0;
+
+  // === Population scaling factor ===
+  // Small populations (< 1000) use baseline growth
+  // Larger populations expand farmland: +0.09x multiplier per 50 people
+  if (population <= 10000) {
+    populationFactor = population < 1000 ? 1 : (Math.floor(population / 50) * 0.1);
+  }
+  else {
+    populationFactor = 20; // Cap growth factor for very large populations
+  }
+  return populationFactor;
+}
+
 /**
  * Calculate daily food production based on temperature and population.
  * 
@@ -517,7 +532,7 @@ function extremeEvent(dayIndex, seasonName, seed) {
  * 
  * Formula:
  * 1. Base growth = minGrowth + maxGrowth * bellCurve(temp)
- * 2. Population factor = 1.0 for pop < 1000, increases by 0.075 per 50 people
+ * 2. Population factor = 1.0 for pop < 1000, increases by 0.09 per 50 people
  * 3. Final growth = minGrowth + (scaledMaxGrowth * bellCurve)
  * 
  * @param {number} temperature - Current day's temperature (°F)
@@ -527,17 +542,8 @@ function extremeEvent(dayIndex, seasonName, seed) {
  */
 function calculateGrowth(temperature, cropConfig, population) {
   const { optimalTemp, tolerance, maxGrowth, minGrowth } = cropConfig;
-  let populationFactor = 0;
-
-  // === Population scaling factor ===
-  // Small populations (< 1000) use baseline growth
-  // Larger populations expand farmland: +0.075x multiplier per 50 people
-  if (population <= 10000) {
-    populationFactor = population < 1000 ? 1 : (Math.floor(population / 50) * 0.09);
-  }
-  else {
-    populationFactor = 18; // Cap growth factor for very large populations
-  }
+  
+  const populationFactor = calculateGrowthFactor(population);
 
   const scaledMaxGrowth = maxGrowth * populationFactor;
 
@@ -599,6 +605,7 @@ function calculateBasicGrowth(temperature, cropConfig) {
  */
 function calculatePopulationChange(population, foodStock, totalFoodNeeded, config) {
   const { baseBirthRate, baseDeathRate } = config;
+  let birthRate = 0;
 
   // === Food availability factor ===
   // Range: 0.0 (no food) to 1.0 (adequate food)
@@ -607,8 +614,12 @@ function calculatePopulationChange(population, foodStock, totalFoodNeeded, confi
 
   // === Adjust rates based on food security ===
   // Birth rate: Scales linearly with food (no food = no births)
-  const birthRate = baseBirthRate * foodRatio;
-  
+  if(foodRatio === 0) {
+    birthRate = baseBirthRate * 0.1; // Minimal birth rate during crisis
+  } else {
+    birthRate = baseBirthRate * foodRatio; // Proportional to food availability
+  }
+
   // Death rate: Inverted relationship (more food = fewer deaths)
   // Formula: baseDeathRate * (2 - foodRatio)
   // - foodRatio = 1.0: deathRate = baseDeathRate (normal)
@@ -1760,17 +1771,42 @@ const actualCurrentSeason = getCurrentSeasonName();
       <h1>Multi-Year Temperature & Food Simulation</h1>
 
       {/* === CURRENT DAY READOUT === */}
-      <div style={{ marginBottom: 15, padding: 10, background: '#f4f4f4' }}>
-        <strong>Day:</strong> {currentDay}<br />
-        <strong>Year:</strong> {current.year + 1 ?? '-'}<br />
-        <strong>Season:</strong> {actualCurrentSeason}<br />
-        <strong>Temperature:</strong> {current.temperature ?? '-'} °F<br />
-        <strong>Food Stock:</strong> {foodData[currentDay * 2]?.food ?? '-'} units<br />
-        <strong>Consumption Rate:</strong> {(activeConfig.foodPerPerson * current.population)} units/day<br />
-        <strong>Daily Growth:</strong>{' '}
-        {current.temperature
-        ? calculateGrowth(current.temperature, cropConfig, current.population).toFixed(1)
-        : '-'} units/day
+      <div style={{ marginBottom: 15, padding: 10, background: '#f4f4f4'}}>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <div style={{ marginBottom: 15, padding: 10, background: '#f4f4f4'}}>
+            <strong>Current Day Data</strong><br />
+            ---------------------------
+            <br />
+            
+            <strong>Day:</strong> {currentDay}<br />
+            <strong>Year:</strong> {current.year + 1 ?? '-'}<br />
+            <strong>Season:</strong> {actualCurrentSeason}<br />
+            <strong>Temperature:</strong> {current.temperature ?? '-'} °F<br />
+          </div>
+          <div style={{ marginBottom: 15, padding: 10, background: '#f4f4f4' }}>
+            <strong>Current Population Data</strong><br />
+            ---------------------------
+            <br />
+            <strong>Population:</strong> {current.population ?? '-'} beings<br />
+            <strong>Birth rate:</strong> {activeConfig.baseBirthRate ?? '-'}<br />
+            <strong>Births:</strong> {populationData[currentDay]?.births ?? '-'}<br />
+            <strong>Deaths rate:</strong> {activeConfig.baseDeathRate ?? '-'}<br />
+            <strong>Deaths:</strong> {populationData[currentDay]?.deaths ?? '-'}<br />
+          </div>
+          <div style={{ marginBottom: 15, padding: 10, background: '#f4f4f4' }}>
+            <strong>Current Food Data</strong><br />
+            ---------------------------
+            <br />
+            <strong>Food Stock:</strong> {foodData[currentDay * 2]?.food ?? '-'} units<br />
+            <strong>Base Growth:</strong>{' '}
+            {calculateBasicGrowth(current.temperature, cropConfig).toFixed(1)} units/day<br />
+            <strong>Growth Factor:</strong> {
+              calculateGrowthFactor(current.population ?? 0).toFixed(2)
+            }<br />
+            <strong>Food Grown:</strong> {foodData[currentDay * 2]?.growth ?? '-'} units<br />
+            <strong>Food Consumed:</strong> {(current.population * activeConfig.foodPerPerson) ?? '-'} units<br />
+          </div>
+        </div>
       </div>
 
       {/* === REGENERATE BUTTON === */}
@@ -2194,9 +2230,9 @@ const actualCurrentSeason = getCurrentSeasonName();
             data={(() => {
               const factorData = [];
               for (let pop = 0; pop <= 20000; pop += 10) {
-                let populationFactor = pop < 1000 ? 1 : (Math.floor(pop / 50) * 0.09);
+                let populationFactor = pop < 1000 ? 1 : (Math.floor(pop / 50) * 0.1);
                 if (pop >= 10000) {
-                  populationFactor = 18; // Cap growth factor for very large populations
+                  populationFactor = 20; // Cap growth factor for very large populations
                 }
                 factorData.push({
                   population: pop,
@@ -2225,7 +2261,7 @@ const actualCurrentSeason = getCurrentSeasonName();
                 stroke="#ff6b6b" 
                 strokeWidth={2}
                 label={{ 
-                  value: `Current Day (${current.population})`, 
+                  value: `Current Population (${current.population})`, 
                   position: 'top',
                   fill: '#ff6b6b',
                   fontSize: 12
