@@ -517,7 +517,7 @@ function extremeEvent(dayIndex, seasonName, seed) {
  * 
  * Formula:
  * 1. Base growth = minGrowth + maxGrowth * bellCurve(temp)
- * 2. Population factor = 1.0 for pop < 100, increases by 0.5 per 100 people
+ * 2. Population factor = 1.0 for pop < 1000, increases by 0.075 per 50 people
  * 3. Final growth = minGrowth + (scaledMaxGrowth * bellCurve)
  * 
  * @param {number} temperature - Current day's temperature (°F)
@@ -527,11 +527,18 @@ function extremeEvent(dayIndex, seasonName, seed) {
  */
 function calculateGrowth(temperature, cropConfig, population) {
   const { optimalTemp, tolerance, maxGrowth, minGrowth } = cropConfig;
+  let populationFactor = 0;
 
   // === Population scaling factor ===
-  // Small populations (< 100) use baseline growth
-  // Larger populations expand farmland: +0.5x multiplier per 100 people
-  const populationFactor = population < 100 ? 1 : (Math.floor(population / 100) * 0.5);
+  // Small populations (< 1000) use baseline growth
+  // Larger populations expand farmland: +0.075x multiplier per 50 people
+  if (population <= 10000) {
+    populationFactor = population < 1000 ? 1 : (Math.floor(population / 50) * 0.09);
+  }
+  else {
+    populationFactor = 18; // Cap growth factor for very large populations
+  }
+
   const scaledMaxGrowth = maxGrowth * populationFactor;
 
   // === Temperature optimality calculation ===
@@ -2186,11 +2193,14 @@ const actualCurrentSeason = getCurrentSeasonName();
             height={300} 
             data={(() => {
               const factorData = [];
-              for (let pop = 50; pop <= 2000; pop += 10) {
-                const factor = pop < 200 ? 1 : (Math.floor(pop / 50) * 0.2);
+              for (let pop = 0; pop <= 20000; pop += 10) {
+                let populationFactor = pop < 1000 ? 1 : (Math.floor(pop / 50) * 0.09);
+                if (pop >= 10000) {
+                  populationFactor = 18; // Cap growth factor for very large populations
+                }
                 factorData.push({
                   population: pop,
-                  factor: factor
+                  factor: populationFactor
                 });
               }
               console.log('Population factor data:', factorData);
