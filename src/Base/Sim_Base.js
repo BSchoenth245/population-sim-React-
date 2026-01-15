@@ -508,59 +508,53 @@ function extremeEvent(dayIndex, seasonName, seed) {
    HELPER FUNCTIONS - CROP & FOOD PRODUCTION
    ============================================================ */
 
-function calculateGrowthFactor(population) {
-  let populationFactor = 0;
-
-  // === Population scaling factor ===
-  // Small populations (< 1000) use baseline growth
-  // Larger populations expand farmland: +0.09x multiplier per 50 people
-  if (population <= 10000) {
-    populationFactor = population < 1000 ? 1 : (Math.floor(population / 50) * 0.1);
-  }
-  else {
-    populationFactor = 20; // Cap growth factor for very large populations
-  }
-  return populationFactor;
-}
-
 /**
  * Calculate daily food production based on temperature and population.
  * 
- * Uses a Gaussian (bell curve) distribution centered on the crop's
- * optimal temperature. Production scales with population size to
- * simulate farmland expansion as civilization grows.
+ * Simplified model: Each person can produce 1.5 units of food per day at optimal
+ * temperature. Production scales linearly with the temperature bell curve.
+ * 
+ * A portion of the food (10%) is automatically set aside for storage to buffer
+ * against poor growing conditions in winter.
  * 
  * Formula:
- * 1. Base growth = minGrowth + maxGrowth * bellCurve(temp)
- * 2. Population factor = 1.0 for pop < 1000, increases by 0.09 per 50 people
- * 3. Final growth = minGrowth + (scaledMaxGrowth * bellCurve)
+ * 1. Total potential production = 1.5 * population * bellCurve(temperature)
+ * 2. 60% goes to immediate food stock
+ * 3. 40% goes to long-term storage
  * 
  * @param {number} temperature - Current day's temperature (°F)
- * @param {Object} cropConfig - Crop parameters {optimalTemp, tolerance, maxGrowth, minGrowth}
+ * @param {Object} cropConfig - Crop parameters {optimalTemp, tolerance}
  * @param {number} population - Current population size
- * @returns {number} Food units produced this day
+ * @returns {{food: number, foodStore: number}} Daily food production split
  */
 function calculateGrowth(temperature, cropConfig, population) {
-  const { optimalTemp, tolerance, maxGrowth, minGrowth } = cropConfig;
+  const { optimalTemp, tolerance } = cropConfig;
   
-  const populationFactor = calculateGrowthFactor(population);
-
-  const scaledMaxGrowth = maxGrowth * populationFactor;
-
   // === Temperature optimality calculation ===
-  // How far from ideal temperature?
+  // Calculate how far current temperature is from optimal
   const deviation = temperature - optimalTemp;
 
   // Gaussian bell curve: e^(-(x²)/(2σ²))
-  // - At optimal temp: bellCurve = 1.0 (maximum)
-  // - Far from optimal: bellCurve approaches 0
-  // - tolerance is standard deviation (σ)
+  // - At optimal temp: bellCurve = 1.0 (100% production)
+  // - At poor temp: bellCurve approaches 0 (minimal production)
+  // - tolerance (σ) controls how sensitive crops are to temperature
   const bellCurve = Math.exp(-(deviation ** 2) / (2 * tolerance ** 2));
+  
+  // === Total food production ===
+  // Each person can produce up to 1.5 units/day at optimal temperature
+  // Actual production scales with temperature via the bell curve
+  // Example: 100 people at optimal temp (bellCurve=1.0) → 150 units
+  // Example: 100 people at poor temp (bellCurve=0.2) → 30 units
+  const totalProduction = population * 1.75 * bellCurve;
+  
+  // === Split production between immediate use and storage ===
+  // 60% goes to immediate food stock (available today)
+  const food = totalProduction * 0.6;
+  
+  // 40% goes to storage (buffer for winter/bad weather)
+  const foodStore = totalProduction * 0.4;
 
-  // === Final production ===
-  // Always produce at least minGrowth, even in terrible conditions
-  // Add scaled maximum production weighted by how close to optimal we are
-  return minGrowth + scaledMaxGrowth * bellCurve;
+  return { food, foodStore };
 }
 
 /**
@@ -590,51 +584,90 @@ function calculateBasicGrowth(temperature, cropConfig) {
    ============================================================ */
 
 /**
- * Calculate population change based on food availability.
+ * Calculate population births/deaths with food scarcity awareness.
  * 
- * Models birth and death rates that respond to food security:
- * - Adequate food: Normal birth rate, low death rate
- * - Food shortage: Reduced births, increased deaths
- * - No food: Minimal births, doubled death rate
+ * The population monitors food storage usage as an early warning system:
+ * - When storage is being depleted: Birth rate drops sharply (conservation mode)
+ * - When storage is stable/growing: Normal birth rate based on food abundance
+ * 
+ * This creates smoother approach to carrying capacity by triggering behavioral
+ * changes BEFORE a food crisis, rather than reacting after starvation begins.
  * 
  * @param {number} population - Current population count
  * @param {number} foodStock - Available food units
- * @param {number} totalFoodNeeded - Food required to feed everyone
- * @param {Object} config - Population parameters {baseBirthRate, baseDeathRate}
- * @returns {{births: number, deaths: number, newPopulation: number}} Population change data
+ * @param {number} foodStorage - Food storage units
+ * @param {number} totalFoodNeeded - Food required (population × foodPerPerson)
+ * @param {number} storageUsedToday - How much storage was consumed today (0 if none)
+ * @param {Object} config - Configuration with base birth/death rates
+ * @returns {{births: number, deaths: number, newPopulation: number}}
  */
-function calculatePopulationChange(population, foodStock, totalFoodNeeded, config) {
+function calculatePopulationChange(population, foodStock, foodStorage, totalFoodNeeded, storageUsedToday, config) {
   const { baseBirthRate, baseDeathRate } = config;
-  let birthRate = 0;
-
-  // === Food availability factor ===
-  // Range: 0.0 (no food) to 1.0 (adequate food)
-  // Capped at 1.0 so surplus food doesn't boost rates beyond baseline
-  const foodRatio = Math.min(1, foodStock / totalFoodNeeded);
-
-  // === Adjust rates based on food security ===
-  // Birth rate: Scales linearly with food (no food = no births)
-  if(foodRatio === 0) {
-    birthRate = baseBirthRate * 0.1; // Minimal birth rate during crisis
-  } else {
-    birthRate = baseBirthRate * foodRatio; // Proportional to food availability
+  
+  // === CALCULATE TOTAL AVAILABLE FOOD ===
+  // Include both current food stock and stored food for safety buffer
+  const totalAvailableFood = foodStock + foodStorage;
+  
+  // === FOOD ABUNDANCE RATIO ===
+  // How much food do we have relative to what we need?
+  // Ratio < 1.0: Food shortage (not enough to feed everyone)
+  // Ratio = 1.0: Exactly enough food (subsistence level)
+  // Ratio > 1.0: Food surplus (can support more people)
+  const foodAbundanceRatio = totalAvailableFood / totalFoodNeeded;
+  
+  // === STORAGE DEPLETION WARNING SYSTEM ===
+  // This is the key addition: population becomes aware when storage is being used
+  // 
+  // If ANY storage was used today, it means daily production wasn't enough
+  // This triggers conservation behavior BEFORE things get critical
+  // 
+  // storageUsedToday > 0 means:
+  // - Daily food production < daily consumption
+  // - We're eating into our reserves
+  // - Population should slow growth NOW, not later
+  const isUsingStorage = storageUsedToday > 0;
+  
+  // === BIRTH RATE ADJUSTMENT ===
+  // Start with food-based birth rate calculation
+  // Square root creates diminishing returns on surplus
+  let birthRateMultiplier = Math.sqrt(Math.max(0, foodAbundanceRatio));
+  
+  // === APPLY CONSERVATION MODE ===
+  // If storage is being depleted, severely reduce birth rate
+  // This represents the population recognizing hard times and having fewer children
+  if (isUsingStorage) {
+    // Reduce birth rate to 20% of normal (80% reduction)
+    // This is a strong signal: "times are tough, postpone having children"
+    // 
+    // Example: If normal birthRateMultiplier = 1.2 (20% above baseline)
+    // After conservation: 1.2 × 0.2 = 0.24 (76% below baseline)
+    // 
+    // This dramatic drop helps population quickly slow as it approaches capacity
+    birthRateMultiplier *= 0.2;
   }
-
-  // Death rate: Inverted relationship (more food = fewer deaths)
-  // Formula: baseDeathRate * (2 - foodRatio)
-  // - foodRatio = 1.0: deathRate = baseDeathRate (normal)
-  // - foodRatio = 0.5: deathRate = 1.5 × baseDeathRate (elevated)
-  // - foodRatio = 0.0: deathRate = 2 × baseDeathRate (crisis)
-  const deathRate = baseDeathRate * (2 - foodRatio);
-
-  // === Calculate absolute numbers ===
-  const births = Math.floor(population * birthRate);
-  const deaths = Math.floor(population * deathRate);
-
-  // === Update population ===
-  // Cannot go below zero
+  
+  const adjustedBirthRate = baseBirthRate * birthRateMultiplier;
+  
+  // === DEATH RATE ADJUSTMENT ===
+  // Death rate increases with food scarcity, decreases with abundance
+  // Formula: baseDeathRate * (2.5 - 1.5 * foodAbundanceRatio)
+  // 
+  // Examples:
+  // - foodAbundanceRatio = 1.0 → 2.5 - 1.5 = 1.0 → death rate at 100% (normal)
+  // - foodAbundanceRatio = 0.5 → 2.5 - 0.75 = 1.75 → death rate at 175%
+  // - foodAbundanceRatio = 0.2 → 2.5 - 0.3 = 2.2 → death rate at 220% (crisis)
+  // 
+  // Cap at minimum 50% death rate for food surplus cases
+  const deathRateMultiplier = Math.max(0.5, 2.5 - 1.5 * foodAbundanceRatio);
+  const adjustedDeathRate = baseDeathRate * deathRateMultiplier;
+  
+  // === CALCULATE BIRTHS AND DEATHS ===
+  const births = Math.floor((population * adjustedBirthRate) / 4);
+  const deaths = Math.floor((population * adjustedDeathRate) / 4);
+  
+  // === UPDATE POPULATION ===
   const newPopulation = Math.max(0, population + births - deaths);
-
+  
   return { 
     births, 
     deaths, 
@@ -711,17 +744,19 @@ export default function TemperatureSimulation() {
     // Crop characteristics
     optimalTemp: 65,                 // Best growing temperature (°F)
     tolerance: 18,                   // Temperature tolerance (σ)
-    maxGrowth: 1000,                 // Peak daily production
-    minGrowth: 100,                  // Minimum daily production
+    maxGrowth: 10,                 // Peak daily production
+    minGrowth: 1,                  // Minimum daily production
+    
     
     // Food economy
-    startingFood: 10000,             // Initial food stockpile
+    startingFood: 200,             // Initial food stockpileactiveCon
     foodPerPerson: 1,                // Daily food consumption per person
     
     // Population settings
-    startingPopulation: 1000,        // Initial population
+    startingPopulation: 100,        // Initial population
     baseBirthRate: 0.01,            // 1% birth rate at full food
     baseDeathRate: 0.008,           // 0.8% death rate at full food
+
   });
 
   /**
@@ -770,6 +805,19 @@ export default function TemperatureSimulation() {
     crop: false,
     food: false
   });
+
+  /**
+   * Current food store amount for easy access in UI.
+   * Updated at the end of each simulation run.
+   */
+  const [foodStore, setFoodStore] = useState(0);
+
+  /**
+   * Food storage timeline.
+   * Array of objects: [{x, storage}, ...]
+   * One entry per day tracking food storage accumulation.
+   */
+  const [foodStorageData, setFoodStorageData] = useState([]);
 
   /* ============================================================
      SIMULATION GENERATION
@@ -923,10 +971,12 @@ setData(generated);
 // Initialize arrays to store daily food and population records
 const foodSimulation = [];       // Will contain 2 entries per day (growth + consumption)
 const populationSimulation = []; // Will contain 1 entry per day (population count + changes)
+const storageSimulation = [];    // Will contain 1 entry per day (food storage accumulation)
 
 // Initialize starting conditions from configuration
 let currentFood = activeConfig.startingFood;           // Food stockpile in units
 let currentPopulation = activeConfig.startingPopulation; // Starting population count
+let currentStorage = 0;                                // Food storage accumulation
 
 // Iterate through every day to simulate the economy
 // This runs AFTER temperature generation so we can look up each day's temperature
@@ -945,13 +995,28 @@ for (let dayIndex = 0; dayIndex < totalDays; dayIndex++) {
   // === MORNING PHASE: HARVEST COMPLETES ===
   // At dawn, the day's crop yield is added to the stockpile
   // This represents farmers bringing in the harvest
-  currentFood += growth;
+  currentFood += growth.food;
+  currentStorage += growth.foodStore;
 
   // === CALCULATE DAILY FOOD NEEDS ===
   // Total food required to feed the entire population
   // Each person consumes foodPerPerson units per day
   // Example: 1000 people × 1 unit/person = 1000 units needed
   const totalFoodNeeded = currentPopulation * activeConfig.foodPerPerson;
+
+  // === CHECK IF WE NEED TO USE STORAGE ===
+  // Calculate how much (if any) storage we'll need to tap today
+  let storageUsedToday = 0;
+  
+  // If current food isn't enough to feed everyone
+  if (currentFood < totalFoodNeeded) {
+    const foodShortage = totalFoodNeeded - currentFood;
+    
+    // Try to pull from storage to cover the shortage
+    storageUsedToday = Math.min(foodShortage, currentStorage);
+    currentFood += storageUsedToday;
+    currentStorage -= storageUsedToday;
+  }
 
   // === CALCULATE POPULATION DYNAMICS ===
   // Determine births and deaths based on food availability
@@ -960,7 +1025,9 @@ for (let dayIndex = 0; dayIndex < totalDays; dayIndex++) {
   const popChange = calculatePopulationChange(
     currentPopulation,  // Current population count
     currentFood,        // Food available after harvest
+    currentStorage,     // Food storage available
     totalFoodNeeded,    // Food needed to feed everyone
+    storageUsedToday,   // How much storage was used today
     activeConfig        // Birth/death rate configuration
   );
   
@@ -976,7 +1043,15 @@ for (let dayIndex = 0; dayIndex < totalDays; dayIndex++) {
     population: Math.round(currentPopulation),    // Current population count
     births: popChange.births,                     // How many were born today
     deaths: popChange.deaths,                     // How many died today
-    foodRatio: Math.min(1, currentFood / totalFoodNeeded)  // Food security (0-1, capped at 1)
+    foodRatio: Math.min(1, (currentFood + currentStorage) / totalFoodNeeded),  // Food security (0-1, includes storage)
+    storageUsed: storageUsedToday                 // How much storage was used today
+  });
+
+  // === RECORD FOOD STORAGE DATA POINT ===
+  // Store today's food storage for visualization
+  storageSimulation.push({
+    x: dayIndex,                                    // X-axis position (day number)
+    storage: Math.round(currentStorage * 10) / 10   // Current storage amount (rounded)
   });
 
   // === RECORD FOOD DATA POINT #1: AFTER GROWTH ===
@@ -986,12 +1061,21 @@ for (let dayIndex = 0; dayIndex < totalDays; dayIndex++) {
     x: dayIndex,                             // X-axis position (day number)
     food: Math.round(currentFood * 10) / 10, // Current food stock (rounded)
     phase: 'growth',                         // Phase indicator for tooltip
-    growth: Math.round(growth * 10) / 10     // How much was harvested today
+    growth: Math.round(growth.food * 10) / 10     // How much was harvested today
   });
 
   // === MIDDAY PHASE: POPULATION CONSUMES FOOD ===
   // At noon, the population eats their daily ration
   // This represents the day's food consumption
+  const foodShortage = totalFoodNeeded - currentFood;
+  
+  if (foodShortage > 0 && currentStorage > 0) {
+    // Pull from storage to make it a zero gain day
+    const storageUsed = Math.min(foodShortage, currentStorage);
+    currentFood += storageUsed;
+    currentStorage -= storageUsed;
+  }
+  
   currentFood -= totalFoodNeeded;
   
   // === PREVENT NEGATIVE FOOD ===
@@ -1018,6 +1102,11 @@ for (let dayIndex = 0; dayIndex < totalDays; dayIndex++) {
 // React will update all charts that depend on these arrays
 setFoodData(foodSimulation);
 setPopulationData(populationSimulation);
+setFoodStorageData(storageSimulation);
+
+// === UPDATE FOOD STORE STATE ===
+// Set the final food store value for easy access in UI
+setFoodStore(currentStorage);
 
 }, [seed, activeConfig]); // Effect dependencies: re-run when seed or config changes
 
@@ -1800,9 +1889,6 @@ const actualCurrentSeason = getCurrentSeasonName();
             <strong>Food Stock:</strong> {foodData[currentDay * 2]?.food ?? '-'} units<br />
             <strong>Base Growth:</strong>{' '}
             {calculateBasicGrowth(current.temperature, cropConfig).toFixed(1)} units/day<br />
-            <strong>Growth Factor:</strong> {
-              calculateGrowthFactor(current.population ?? 0).toFixed(2)
-            }<br />
             <strong>Food Grown:</strong> {foodData[currentDay * 2]?.growth ?? '-'} units<br />
             <strong>Food Consumed:</strong> {(current.population * activeConfig.foodPerPerson) ?? '-'} units<br />
           </div>
@@ -2217,51 +2303,38 @@ const actualCurrentSeason = getCurrentSeasonName();
           </LineChart>
         </div>
 
-        {/* === POPULATION GROWTH FACTOR === */}
+        {/* === FOOD STORAGE CHART === */}
         <div style={{ flex: '1 1 45%', minWidth: 400 }}>
-          <h3>Population Growth Factor</h3>
+          <h3>Food Storage Over Time</h3>
           <p style={{ fontSize: 14, color: '#666' }}>
-            How population size affects total food production capacity.
+            Current food storage: {foodStore.toFixed(1)} units
           </p>
 
           <LineChart 
             width={750} 
             height={300} 
-            data={(() => {
-              const factorData = [];
-              for (let pop = 0; pop <= 20000; pop += 10) {
-                let populationFactor = pop < 1000 ? 1 : (Math.floor(pop / 50) * 0.1);
-                if (pop >= 10000) {
-                  populationFactor = 20; // Cap growth factor for very large populations
-                }
-                factorData.push({
-                  population: pop,
-                  factor: populationFactor
-                });
-              }
-              console.log('Population factor data:', factorData);
-              return factorData;
-            })()}
+            data={foodStorageData}
             margin={{ top: 20, right: 30, left: 60, bottom: 40 }}
           >
             <CartesianGrid strokeDasharray="3 3" />
             <XAxis
-              dataKey="population"
+              dataKey="x"
               type="number"
-              label={{ value: 'Population', position: 'insideBottom', offset: -5 }}
+              domain={[0, 365 * activeConfig.yearCount]}
+              label={{ value: 'Day', position: 'insideBottom', offset: -5 }}
             />
             <YAxis
-              label={{ value: 'Growth Multiplier', angle: -90, position: 'outside' }}
+              label={{ value: 'Storage (units)', angle: -90, position: 'outside' }}
             />
             <Tooltip />
-            {/* Show current day's temperature as a dot on the curve */}
-            {current.population !== undefined && current.population !== null && (
+            {/* Show current day's food storage */}
+            {currentDay >= 0 && (
               <ReferenceLine 
-                x={current.population} 
+                x={currentDay} 
                 stroke="#ff6b6b" 
                 strokeWidth={2}
                 label={{ 
-                  value: `Current Population (${current.population})`, 
+                  value: `Day ${currentDay}`, 
                   position: 'top',
                   fill: '#ff6b6b',
                   fontSize: 12
@@ -2270,11 +2343,11 @@ const actualCurrentSeason = getCurrentSeasonName();
             )}
             <Line
               type="monotone"
-              dataKey="factor"
-              stroke="#9b59b6"
+              dataKey="storage"
+              stroke="#f39c12"
               strokeWidth={3}
               dot={false}
-              name="Population Factor"
+              name="Food Storage"
             />
           </LineChart>
         </div>
